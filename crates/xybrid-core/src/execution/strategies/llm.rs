@@ -972,6 +972,7 @@ mod tests {
             postprocessing: vec![],
             files: vec!["model.gguf".to_string()],
             description: None,
+            backend: None,
             metadata: HashMap::new(),
             voices: None,
             max_chunk_chars: None,

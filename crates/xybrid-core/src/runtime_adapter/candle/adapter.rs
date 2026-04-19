@@ -207,6 +207,9 @@ impl RuntimeAdapter for CandleRuntimeAdapter {
             EnvelopeKind::Text(_) => Err(AdapterError::InvalidInput(
                 "Whisper expects Embedding (mel spectrogram) input, not Text".to_string(),
             )),
+            EnvelopeKind::TokenIds(_) => Err(AdapterError::InvalidInput(
+                "Whisper expects Embedding (mel spectrogram) input, not TokenIds".to_string(),
+            )),
         }
     }
 }

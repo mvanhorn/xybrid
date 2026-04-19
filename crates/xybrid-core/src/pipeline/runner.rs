@@ -446,6 +446,13 @@ impl PipelineRunner {
                     "output": values
                 })
             }
+            EnvelopeKind::TokenIds(ids) => {
+                serde_json::json!({
+                    "type": "tokens",
+                    "length": ids.len(),
+                    "output": ids,
+                })
+            }
         }
     }
 
@@ -498,6 +505,15 @@ impl PipelineRunner {
                 OutputResultType::Embedding,
                 OutputResult::Embedding(values.clone()),
             ),
+            EnvelopeKind::TokenIds(ids) => {
+                // Token IDs are an internal stage type; surface them as JSON
+                // so a caller can still inspect the raw sequence if one leaks
+                // through to the final pipeline output.
+                (
+                    OutputResultType::Json,
+                    OutputResult::Json(serde_json::json!({ "tokens": ids })),
+                )
+            }
         }
     }
 

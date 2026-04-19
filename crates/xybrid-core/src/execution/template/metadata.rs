@@ -228,6 +228,20 @@ pub struct ModelMetadata {
     #[serde(default)]
     pub description: Option<String>,
 
+    /// Optional: Explicit LLM backend selection override.
+    ///
+    /// When set, the runtime selector (see
+    /// `crate::runtime_adapter::selector`) bypasses its default priority and
+    /// uses this backend for LLM-family models. Accepted values (case-insensitive,
+    /// matched via [`crate::runtime_adapter::selector::BackendChoice::parse`]):
+    /// `auto`, `mlx`, `llamacpp`, `mistral`.
+    ///
+    /// `None` (or the literal `"auto"`) means "let the selector decide".
+    ///
+    /// This field is ignored for non-LLM models. Added in US-016.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+
     /// Optional: Additional metadata
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
@@ -271,6 +285,7 @@ impl ModelMetadata {
             postprocessing: Vec::new(),
             files: vec![model_file],
             description: None,
+            backend: None,
             metadata: HashMap::new(),
             voices: None,
             max_chunk_chars: None,
@@ -299,6 +314,7 @@ impl ModelMetadata {
             postprocessing: Vec::new(),
             files: vec![model_file],
             description: None,
+            backend: None,
             metadata: HashMap::new(),
             voices: None,
             max_chunk_chars: None,
@@ -324,6 +340,7 @@ impl ModelMetadata {
             postprocessing: Vec::new(),
             files,
             description: None,
+            backend: None,
             metadata: HashMap::new(),
             voices: None,
             max_chunk_chars: None,

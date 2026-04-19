@@ -142,6 +142,18 @@ compile_error!(
 /// runtime core version without a parallel constant.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+// llm-mlx uses Apple's MLX framework, which depends on Metal (macOS/iOS only).
+#[cfg(all(feature = "llm-mlx", not(any(target_os = "macos", target_os = "ios"))))]
+compile_error!(
+    "Invalid feature combination: `llm-mlx` requires macOS or iOS.\n\n\
+    Reason: MLX is Apple's array framework and links against Metal + Accelerate, \
+    which are only available on Apple platforms.\n\n\
+    Solution:\n\
+    - For macOS/iOS: `llm-mlx` is valid (routes supported models via MLX)\n\
+    - For Android: Use `llm-llamacpp`\n\
+    - For other platforms: Use `llm-llamacpp` or `llm-mistral`"
+);
+
 // ============================================================================
 // Prelude - Common imports for convenience
 // ============================================================================

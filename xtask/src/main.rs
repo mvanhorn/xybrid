@@ -132,6 +132,39 @@ fn platform_preset_for_target(target: &str) -> &'static str {
     }
 }
 
+/// Returns extra feature flags to auto-pass on top of the platform preset for
+/// specific targets.
+///
+/// Currently this enables `llm-mlx` for Apple Silicon targets so MLX is always
+/// available in xtask-driven builds, even when a caller overrides the platform
+/// preset. The platform-macos and platform-ios presets already include llm-mlx,
+/// so for the auto-detected case this is redundant — but it future-proofs
+/// against preset overrides and makes the intent explicit on the command line.
+///
+/// # Arguments
+/// * `target` - A Rust target triple (e.g., "aarch64-apple-darwin")
+///
+/// # Returns
+/// Extra features as a comma-separated string, or an empty string if none.
+fn extra_features_for_target(target: &str) -> &'static str {
+    match target {
+        "aarch64-apple-darwin" | "aarch64-apple-ios" | "aarch64-apple-ios-sim" => "llm-mlx",
+        _ => "",
+    }
+}
+
+/// Combines [`platform_preset_for_target`] and [`extra_features_for_target`] into
+/// the full comma-separated features string cargo expects.
+fn features_for_target(target: &str) -> String {
+    let preset = platform_preset_for_target(target);
+    let extras = extra_features_for_target(target);
+    if extras.is_empty() {
+        preset.to_string()
+    } else {
+        format!("{preset},{extras}")
+    }
+}
+
 /// Returns the platform preset for the current build machine.
 ///
 /// Uses compile-time detection to determine the host platform.
@@ -645,13 +678,25 @@ fn build_uniffi(
         host_platform_preset().to_string()
     };
 
-    println!("Building xybrid-uniffi with features: {}", preset);
+    // Auto-append target-specific extras (e.g. llm-mlx on Apple Silicon).
+    let features = match target.as_deref() {
+        Some(t) => {
+            let extras = extra_features_for_target(t);
+            if extras.is_empty() {
+                preset.clone()
+            } else {
+                format!("{preset},{extras}")
+            }
+        }
+        None => preset.clone(),
+    };
+
+    println!("Building xybrid-uniffi with features: {}", features);
 
     let mut cmd = Command::new("cargo");
     cmd.arg("build").arg("-p").arg("xybrid-uniffi");
 
-    // Pass the platform preset as a feature
-    cmd.arg("--features").arg(&preset);
+    cmd.arg("--features").arg(&features);
 
     if release {
         cmd.arg("--release");
@@ -721,8 +766,15 @@ fn build_ffi(
         host_platform_preset().to_string()
     };
 
-    // Build features list
+    // Build features list: preset + target-specific extras (e.g. llm-mlx on
+    // Apple Silicon) + optional C# bindings.
     let mut features = vec![preset.clone()];
+    if let Some(ref t) = target {
+        let extras = extra_features_for_target(t);
+        if !extras.is_empty() {
+            features.push(extras.to_string());
+        }
+    }
     if csharp {
         features.push("csharp".to_string());
     }
@@ -1432,9 +1484,9 @@ fn build_xcframework(release: bool, version: &str) -> Result<()> {
             continue;
         }
 
-        // Resolve platform preset for this target
-        let preset = platform_preset_for_target(target);
-        println!("Building for {} with features: {}...", description, preset);
+        // Resolve platform preset for this target (plus any target-specific extras)
+        let features = features_for_target(target);
+        println!("Building for {} with features: {}...", description, features);
 
         let mut cmd = Command::new("cargo");
         cmd.arg("build")
@@ -1443,7 +1495,7 @@ fn build_xcframework(release: bool, version: &str) -> Result<()> {
             .arg("--target")
             .arg(target)
             .arg("--features")
-            .arg(preset);
+            .arg(&features);
 
         if release {
             cmd.arg("--release");
@@ -1466,7 +1518,7 @@ fn build_xcframework(release: bool, version: &str) -> Result<()> {
         }
 
         built_targets.push((target, description));
-        println!("  ✓ {} ({})", description, preset);
+        println!("  ✓ {} ({})", description, features);
     }
 
     let has_ios_device = built_targets.iter().any(|(t, _)| *t == IOS_ARM64);
@@ -1570,9 +1622,9 @@ fn build_xcframework_macos_only(release: bool, version: &str) -> Result<()> {
     let targets = [(MACOS_ARM64, "macOS arm64")];
 
     for (target, description) in targets.iter() {
-        // Resolve platform preset for this target (will be platform-macos)
-        let preset = platform_preset_for_target(target);
-        println!("Building for {} with features: {}...", description, preset);
+        // Resolve platform preset for this target plus any target-specific extras
+        let features = features_for_target(target);
+        println!("Building for {} with features: {}...", description, features);
 
         let mut cmd = Command::new("cargo");
         cmd.arg("build")
@@ -1581,7 +1633,7 @@ fn build_xcframework_macos_only(release: bool, version: &str) -> Result<()> {
             .arg("--target")
             .arg(target)
             .arg("--features")
-            .arg(preset);
+            .arg(&features);
 
         if release {
             cmd.arg("--release");
@@ -1595,7 +1647,7 @@ fn build_xcframework_macos_only(release: bool, version: &str) -> Result<()> {
             anyhow::bail!("cargo build failed for {}", target);
         }
 
-        println!("  ✓ {} ({})", description, preset);
+        println!("  ✓ {} ({})", description, features);
     }
 
     println!();
@@ -2089,9 +2141,9 @@ fn build_flutter(
     // Build for each target
     let mut built_targets = Vec::new();
     for target in &targets {
-        // Resolve the platform preset for this target
-        let preset = platform_preset_for_target(target);
-        println!("Building for {} with features: {}...", target, preset);
+        // Resolve the platform preset for this target plus any target-specific extras
+        let features = features_for_target(target);
+        println!("Building for {} with features: {}...", target, features);
 
         let build_result = match platform {
             FlutterPlatform::Android => {
@@ -2100,13 +2152,13 @@ fn build_flutter(
             }
             _ => {
                 // Other platforms use regular cargo build
-                build_flutter_native(target, release, preset)
+                build_flutter_native(target, release, &features)
             }
         };
 
         match build_result {
             Ok(()) => {
-                println!("  ✓ {} ({})", target, preset);
+                println!("  ✓ {} ({})", target, features);
                 built_targets.push(*target);
             }
             Err(e) => {
@@ -3199,6 +3251,53 @@ mod tests {
         );
         assert_eq!(
             platform_preset_for_target("x86_64-pc-windows-msvc"),
+            "platform-desktop"
+        );
+    }
+
+    #[test]
+    fn test_extra_features_for_apple_silicon_targets() {
+        // Apple aarch64 targets should auto-pass llm-mlx.
+        assert_eq!(extra_features_for_target("aarch64-apple-darwin"), "llm-mlx");
+        assert_eq!(extra_features_for_target("aarch64-apple-ios"), "llm-mlx");
+        assert_eq!(
+            extra_features_for_target("aarch64-apple-ios-sim"),
+            "llm-mlx"
+        );
+    }
+
+    #[test]
+    fn test_extra_features_for_non_apple_silicon_targets() {
+        // Intel Apple, Android, and desktop targets do not get llm-mlx.
+        assert_eq!(extra_features_for_target("x86_64-apple-darwin"), "");
+        assert_eq!(extra_features_for_target("x86_64-apple-ios"), "");
+        assert_eq!(extra_features_for_target("aarch64-linux-android"), "");
+        assert_eq!(extra_features_for_target("x86_64-unknown-linux-gnu"), "");
+        assert_eq!(extra_features_for_target("x86_64-pc-windows-msvc"), "");
+    }
+
+    #[test]
+    fn test_features_for_target_combines_preset_and_extras() {
+        // Apple Silicon: preset + extras
+        assert_eq!(
+            features_for_target("aarch64-apple-darwin"),
+            "platform-macos,llm-mlx"
+        );
+        assert_eq!(
+            features_for_target("aarch64-apple-ios"),
+            "platform-ios,llm-mlx"
+        );
+        // No extras: just the preset
+        assert_eq!(
+            features_for_target("x86_64-apple-darwin"),
+            "platform-macos"
+        );
+        assert_eq!(
+            features_for_target("aarch64-linux-android"),
+            "platform-android"
+        );
+        assert_eq!(
+            features_for_target("x86_64-unknown-linux-gnu"),
             "platform-desktop"
         );
     }

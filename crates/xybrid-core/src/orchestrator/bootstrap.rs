@@ -384,6 +384,7 @@ impl RuntimeAdapter for CloudRuntimeAdapter {
             EnvelopeKind::Audio(_) => EnvelopeKind::Text("cloud-output-transcribed".to_string()),
             EnvelopeKind::Text(t) => EnvelopeKind::Text(format!("cloud-output-{}", t)),
             EnvelopeKind::Embedding(_) => EnvelopeKind::Text("cloud-output".to_string()),
+            EnvelopeKind::TokenIds(_) => EnvelopeKind::Text("cloud-output-tokens".to_string()),
         };
 
         Ok(crate::ir::Envelope::new(output))
@@ -429,6 +430,7 @@ impl RuntimeAdapter for MockRuntimeAdapter {
             EnvelopeKind::Audio(_) => EnvelopeKind::Text("mock-output-transcribed".to_string()),
             EnvelopeKind::Text(t) => EnvelopeKind::Text(format!("mock-output-{}", t)),
             EnvelopeKind::Embedding(_) => EnvelopeKind::Text("mock-output".to_string()),
+            EnvelopeKind::TokenIds(_) => EnvelopeKind::Text("mock-output-tokens".to_string()),
         };
 
         Ok(crate::ir::Envelope::new(output))

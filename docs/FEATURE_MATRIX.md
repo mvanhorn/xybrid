@@ -32,6 +32,8 @@ This document provides a comprehensive reference for all feature flags, platform
 | **llm-mistral-metal** | mistral.rs with Metal acceleration | `llm-mistral`, `mistralrs/metal` |
 | **llm-mistral-cuda** | mistral.rs with CUDA acceleration | `llm-mistral`, `mistralrs/cuda` |
 | **llm-llamacpp** | llama.cpp backend (Android-compatible) | *(marker feature - triggers build.rs)* |
+| **llm-mlx** | MLX backend skeleton (config parsing, weight enumeration, registry wiring) — Apple Silicon only | `xybrid-mlx`, `safetensors`, `minijinja`, `rand` |
+| **llm-mlx-runtime** | MLX runtime (real forward pass via Metal) — Apple Silicon only | `llm-mlx`, `xybrid-mlx/bindings` |
 
 ### Notes
 
@@ -39,6 +41,22 @@ This document provides a comprehensive reference for all feature flags, platform
   1. Triggers `build.rs` to compile vendored llama.cpp via CMake
   2. Gates source code with `#[cfg(feature = "llm-llamacpp")]` blocks
   3. Requires `vendor/llama.cpp` directory with cloned llama.cpp source
+
+- `llm-mlx` gates the `runtime_adapter/mlx` module (config parsing, tokenizer,
+  chat template, sampler, weight-key enumeration) and pulls in `safetensors`,
+  `minijinja`, and `rand` as optional deps. It is **mutually compatible** with
+  `llm-llamacpp` — both can be enabled in the same build and the runtime selector
+  (`runtime_adapter/selector`) picks MLX on Apple Silicon when the model registry
+  has an `mlx` variant; otherwise it falls through to llama.cpp. A `compile_error!`
+  fires if this feature is enabled on a non-Apple target.
+
+- `llm-mlx-runtime` is the *real* MLX forward-pass gate — it forwards
+  `xybrid-mlx/bindings` which statically links the `mlx.xcframework` plus Metal,
+  MetalPerformanceShaders, Foundation, and Accelerate. Fetched by
+  `tools/scripts/fetch-mlx-xcframework.sh`. See `vendor/mlx-apple/README.md` and
+  [`backends/mlx.md`](backends/mlx.md). Without `llm-mlx-runtime`, the skeleton
+  paths compile cross-platform and LLM generate / embedding run paths surface a
+  pointed `NotImplemented` error naming the feature gate and the fetch script.
 
 ---
 
@@ -48,8 +66,8 @@ This document provides a comprehensive reference for all feature flags, platform
 |---------|-------------|-------------------------|
 | **default** | No default features | *(none)* |
 | **platform-android** | Android preset | `ort-dynamic`, `candle`, `llm-llamacpp` |
-| **platform-ios** | iOS preset | `ort-download`, `ort-coreml`, `candle-metal`, `candle-hub`, `llm-llamacpp` |
-| **platform-macos** | macOS preset | `ort-download`, `ort-coreml`, `candle-metal`, `candle-hub`, `llm-llamacpp` |
+| **platform-ios** | iOS preset | `ort-download`, `ort-coreml`, `candle-metal`, `candle-hub`, `llm-llamacpp`, `llm-mlx` |
+| **platform-macos** | macOS preset | `ort-download`, `ort-coreml`, `candle-metal`, `candle-hub`, `llm-llamacpp`, `llm-mlx` |
 | **platform-desktop** | Desktop (Linux/Windows) preset | `ort-download`, `llm-llamacpp` |
 | **ort-download** | Forward to core | `xybrid-core/ort-download` |
 | **ort-dynamic** | Forward to core | `xybrid-core/ort-dynamic` |
@@ -62,6 +80,8 @@ This document provides a comprehensive reference for all feature flags, platform
 | **llm-mistral-metal** | Forward to core | `xybrid-core/llm-mistral-metal` |
 | **llm-mistral-cuda** | Forward to core | `xybrid-core/llm-mistral-cuda` |
 | **llm-llamacpp** | Forward to core | `xybrid-core/llm-llamacpp` |
+| **llm-mlx** | Forward to core | `xybrid-core/llm-mlx` |
+| **llm-mlx-runtime** | Forward to core | `xybrid-core/llm-mlx-runtime` |
 
 ---
 
@@ -85,6 +105,8 @@ This document provides a comprehensive reference for all feature flags, platform
 | **llm-mistral-metal** | Forward to SDK | `xybrid-sdk/llm-mistral-metal` |
 | **llm-mistral-cuda** | Forward to SDK | `xybrid-sdk/llm-mistral-cuda` |
 | **llm-llamacpp** | Forward to SDK | `xybrid-sdk/llm-llamacpp` |
+| **llm-mlx** | Forward to SDK | `xybrid-sdk/llm-mlx` |
+| **llm-mlx-runtime** | Forward to SDK | `xybrid-sdk/llm-mlx-runtime` |
 
 ---
 
@@ -95,9 +117,11 @@ Platform presets are the **single source of truth** for platform-specific featur
 | Preset | Target Platform | Core Features Enabled | Rationale |
 |--------|-----------------|----------------------|-----------|
 | **platform-android** | Android (all ABIs) | `ort-dynamic`, `candle`, `llm-llamacpp` | Dynamic ORT loading for AAR distribution; Candle (CPU) for Whisper ASR; llama.cpp has runtime SIMD detection; mistral.rs causes SIGILL on devices without ARMv8.2-A FP16 |
-| **platform-ios** | iOS (arm64, simulator) | `ort-download`, `ort-coreml`, `candle-metal`, `llm-llamacpp` | Static ORT linking; CoreML for ANE acceleration; Metal for GPU |
-| **platform-macos** | macOS (arm64, x86_64) | `ort-download`, `ort-coreml`, `candle-metal`, `llm-llamacpp` | Same as iOS - unified Apple platform features |
+| **platform-ios** | iOS (arm64, simulator) | `ort-download`, `ort-coreml`, `candle-metal`, `llm-llamacpp`, `llm-mlx` | Static ORT linking; CoreML for ANE acceleration; Metal for GPU; MLX for supported LLM architectures (routed at runtime) |
+| **platform-macos** | macOS (arm64, x86_64) | `ort-download`, `ort-coreml`, `candle-metal`, `llm-llamacpp`, `llm-mlx` | Same as iOS — unified Apple platform features |
 | **platform-desktop** | Linux, Windows | `ort-download`, `llm-llamacpp` | Static ORT linking; llama.cpp for LLM inference (unified across all platforms) |
+
+> **Note on MLX**: `llm-mlx` is only included in the Apple-platform presets (`platform-ios`, `platform-macos`). It is **mutually compatible** with `llm-llamacpp` — both can be enabled in the same build and the runtime selector chooses between them per model at load time (see US-016). MLX is not added to `platform-android` or `platform-desktop` because MLX links against Metal and Accelerate, which are Apple-only.
 
 > **Note**: The CLI (`xybrid-cli`) adds `huggingface` to all its platform presets so `xybrid run --huggingface` works in release builds. SDK/FFI presets do not include `huggingface` by default — add it individually if needed.
 
@@ -119,9 +143,11 @@ The following types and modules are conditionally compiled based on feature flag
 |--------|-----------|-------------|
 | `coreml` | `target_os = "macos" OR target_os = "ios" OR test` | CoreML runtime adapter |
 | `candle` | `feature = "candle"` | Candle (pure Rust) runtime adapter |
-| `llm` | `feature = "llm-mistral" OR feature = "llm-llamacpp"` | Shared LLM types and adapter |
+| `llm` | `feature = "llm-mistral" OR feature = "llm-llamacpp" OR feature = "llm-mlx"` | Shared LLM types and adapter |
 | `mistral` | `feature = "llm-mistral"` | MistralBackend implementation |
 | `llama_cpp` | `feature = "llm-llamacpp"` | LlamaCppBackend implementation |
+| `mlx` | `feature = "llm-mlx"` | `MlxLlmAdapter`, `MlxEmbeddingAdapter`, tokenizer, chat template, sampler, generate loop |
+| `selector` | always | Runtime backend selector (`BackendChoice`, `SelectorCfg`, `RegistryView`) — always-available so YAML errors are constructable cross-platform |
 
 ### execution/executor.rs
 
@@ -143,10 +169,13 @@ The following types and modules are conditionally compiled based on feature flag
 | `ONNXMobileRuntimeAdapter` | `target_os = "android" OR test` |
 | `CoreMLRuntimeAdapter` | `target_os = "macos" OR target_os = "ios" OR test` |
 | `CandleBackend`, `CandleRuntimeAdapter` | `feature = "candle"` |
-| `ChatMessage`, `GenerationConfig`, `GenerationOutput`, `LlmBackend`, `LlmConfig`, `LlmResult`, `LlmRuntimeAdapter` | `feature = "llm-mistral" OR feature = "llm-llamacpp"` |
+| `ChatMessage`, `GenerationConfig`, `GenerationOutput`, `LlmBackend`, `LlmConfig`, `LlmResult`, `LlmRuntimeAdapter` | `feature = "llm-mistral" OR feature = "llm-llamacpp" OR feature = "llm-mlx"` |
 | `MistralBackend` | `feature = "llm-mistral"` |
 | `LlamaCppBackend` | `feature = "llm-llamacpp"` |
 | `llama_log_get_verbosity`, `llama_log_set_verbosity` | `feature = "llm-llamacpp"` |
+| `MlxLlmAdapter`, `MlxLlmConfig`, `MlxLlmError`, `MlxLlmResult`, `ModelArchitecture`, `ModelConfig`, `KvCache`, `KV_CACHE_PAGE_TOKENS`, `ChatTemplate`, `Sampler` | `feature = "llm-mlx"` |
+| `MlxEmbeddingAdapter`, `MlxEmbeddingConfig`, `Pooling`, `apply_pooling`, `l2_normalize` | `feature = "llm-mlx"` |
+| `BackendChoice`, `SelectorError`, `SelectorCfg`, `RegistryView`, `probe_mlx_runtime` | always (runtime selector is cross-platform) |
 
 ---
 
@@ -161,8 +190,10 @@ The following feature combinations are invalid and should produce compile-time e
 | `candle-metal` on non-Apple targets | Metal is Apple-only | Use `candle` (CPU) or `candle-cuda` |
 | `candle-cuda` on Apple targets | CUDA not available on Apple | Use `candle-metal` |
 | `ort-coreml` on non-Apple targets | CoreML is Apple-only | Use `ort-download` |
+| `llm-mlx` on non-Apple targets | MLX links against Metal + Accelerate (Apple-only) | Use `llm-llamacpp` |
+| `llm-mlx-runtime` on non-Apple targets | Requires `mlx.xcframework` which ships arm64 Apple slices only | Use `llm-llamacpp` |
 
-**Note**: As of this writing, these compile_error! guards are planned but not yet implemented. See US-006 in the feature cascade fix PRD.
+**Note**: All of the above are enforced at compile time via `compile_error!` guards in `crates/xybrid-core/src/lib.rs` and the cfg-gated module files. See the individual module sources for the exact predicates.
 
 ---
 

@@ -1146,6 +1146,7 @@ impl Pipeline {
                 EnvelopeKind::Text(_) => OutputType::Text,
                 EnvelopeKind::Audio(_) => OutputType::Audio,
                 EnvelopeKind::Embedding(_) => OutputType::Embedding,
+                EnvelopeKind::TokenIds(_) => OutputType::Unknown,
             };
             (output_type, last.output.clone())
         } else {
@@ -1303,6 +1304,7 @@ impl Pipeline {
                     EnvelopeKind::Text(_) => OutputType::Text,
                     EnvelopeKind::Audio(_) => OutputType::Audio,
                     EnvelopeKind::Embedding(_) => OutputType::Embedding,
+                    EnvelopeKind::TokenIds(_) => OutputType::Unknown,
                 };
                 (output_type, last.output.clone())
             } else {

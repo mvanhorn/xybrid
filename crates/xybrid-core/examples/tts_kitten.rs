@@ -104,6 +104,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("❌ Unexpected embedding output: {} dimensions", emb.len());
             return Err("Expected audio output, got embedding".into());
         }
+        EnvelopeKind::TokenIds(ids) => {
+            println!("❌ Unexpected token IDs output: {} ids", ids.len());
+            return Err("Expected audio output, got token IDs".into());
+        }
     }
 
     println!();

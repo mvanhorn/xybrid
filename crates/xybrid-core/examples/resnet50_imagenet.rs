@@ -133,6 +133,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         EnvelopeKind::Audio(_) => {
             println!("🔊 Audio output (unexpected for ResNet-50)");
         }
+        EnvelopeKind::TokenIds(_) => {
+            println!("🔢 TokenIds output (unexpected for ResNet-50)");
+        }
     }
 
     println!();

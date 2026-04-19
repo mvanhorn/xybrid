@@ -110,6 +110,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         EnvelopeKind::Audio(_) => {
             println!("🔊 Audio output (unexpected for text model)");
         }
+        EnvelopeKind::TokenIds(_) => {
+            println!("🔢 TokenIds output (unexpected for embedding model)");
+        }
     }
 
     println!();

@@ -108,6 +108,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         EnvelopeKind::Audio(_) => {
             println!("⚠️  Unexpected: Got audio output instead of text");
         }
+        EnvelopeKind::TokenIds(_) => {
+            println!("⚠️  Unexpected: Got raw token IDs output instead of text");
+        }
     }
 
     println!();

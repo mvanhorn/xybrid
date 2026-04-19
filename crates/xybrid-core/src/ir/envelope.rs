@@ -47,6 +47,12 @@ pub enum EnvelopeKind {
     Text(String),
     /// Embedding vectors (feature vectors, embeddings, etc.)
     Embedding(Vec<f32>),
+    /// Token IDs (e.g., HuggingFace tokenizer output for LLM prefill).
+    ///
+    /// Produced by the `Tokenize` preprocessing step and consumed by
+    /// backends such as the MLX LLM adapter. `i64` matches the element
+    /// type used by ONNX integer inputs and MLX-LM bundles.
+    TokenIds(Vec<i64>),
 }
 
 impl EnvelopeKind {
@@ -54,12 +60,13 @@ impl EnvelopeKind {
     ///
     /// # Returns
     ///
-    /// A string describing the variant (e.g., "Audio", "Text", "Embedding")
+    /// A string describing the variant (e.g., "Audio", "Text", "Embedding", "TokenIds")
     pub fn as_str(&self) -> &'static str {
         match self {
             EnvelopeKind::Audio(_) => "Audio",
             EnvelopeKind::Text(_) => "Text",
             EnvelopeKind::Embedding(_) => "Embedding",
+            EnvelopeKind::TokenIds(_) => "TokenIds",
         }
     }
 
@@ -68,11 +75,13 @@ impl EnvelopeKind {
     /// For Audio, returns the length of the byte vector.
     /// For Text, returns the byte length of the string.
     /// For Embedding, returns the byte length of the float vector.
+    /// For TokenIds, returns the byte length of the i64 vector.
     pub fn payload_size(&self) -> usize {
         match self {
             EnvelopeKind::Audio(data) => data.len(),
             EnvelopeKind::Text(data) => data.len(),
             EnvelopeKind::Embedding(data) => data.len() * std::mem::size_of::<f32>(),
+            EnvelopeKind::TokenIds(data) => data.len() * std::mem::size_of::<i64>(),
         }
     }
 }
@@ -586,6 +595,7 @@ mod tests {
         assert_eq!(EnvelopeKind::Audio(vec![]).as_str(), "Audio");
         assert_eq!(EnvelopeKind::Text(String::new()).as_str(), "Text");
         assert_eq!(EnvelopeKind::Embedding(vec![]).as_str(), "Embedding");
+        assert_eq!(EnvelopeKind::TokenIds(vec![]).as_str(), "TokenIds");
     }
 
     #[test]
@@ -598,6 +608,33 @@ mod tests {
 
         let embedding = EnvelopeKind::Embedding(vec![0.0f32; 10]);
         assert_eq!(embedding.payload_size(), 10 * std::mem::size_of::<f32>());
+
+        let tokens = EnvelopeKind::TokenIds(vec![0i64; 8]);
+        assert_eq!(tokens.payload_size(), 8 * std::mem::size_of::<i64>());
+    }
+
+    #[test]
+    fn test_envelope_tokenids_roundtrip() -> Result<(), EnvelopeError> {
+        let ids = vec![9707_i64, 11, 1879, 0];
+        let envelope = Envelope::new(EnvelopeKind::TokenIds(ids.clone()));
+
+        // Binary roundtrip via bincode
+        let bytes = envelope.to_bytes()?;
+        let deserialized = Envelope::from_bytes(&bytes)?;
+        match deserialized.kind {
+            EnvelopeKind::TokenIds(decoded) => assert_eq!(decoded, ids),
+            _ => panic!("Expected TokenIds variant"),
+        }
+
+        // JSON roundtrip (cache compatibility)
+        let json = envelope.to_json()?;
+        let from_json = Envelope::from_json(&json)?;
+        match from_json.kind {
+            EnvelopeKind::TokenIds(decoded) => assert_eq!(decoded, ids),
+            _ => panic!("Expected TokenIds variant"),
+        }
+
+        Ok(())
     }
 
     #[test]

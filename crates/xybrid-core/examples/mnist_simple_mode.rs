@@ -151,6 +151,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         EnvelopeKind::Audio(_) => {
             println!("🔊 Audio output (unexpected for MNIST)");
         }
+        EnvelopeKind::TokenIds(_) => {
+            println!("🔢 TokenIds output (unexpected for MNIST)");
+        }
     }
 
     println!();

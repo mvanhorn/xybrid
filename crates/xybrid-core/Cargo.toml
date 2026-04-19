@@ -37,7 +37,7 @@ url = "2.5"
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "sync"] }
 tempfile = "3.8"
 log = "0.4"  # Standard logging facade
-tracing = "0.1"  # Structured logging for streaming backend telemetry
+tracing = "0.1"  # Structured logging for streaming backend telemetry and MLX adapter
 
 # System information for device detection (v0.0.7)
 sysinfo = "0.32"
@@ -61,7 +61,7 @@ image = "0.25"  # For image resizing and processing
 # Disable default features to exclude esaxx_fast (esaxx-rs/cpp) which hardcodes
 # static_crt(true) on MSVC, producing /MT objects that conflict with ORT's /MD.
 # We only run tokenizer models, we don't train them — esaxx-rs is only for BPE training.
-tokenizers = { version = "0.19", default-features = false, features = ["onig"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 schemars = { version = "0.8", optional = true }  # JSON Schema generation for model_metadata.json
 hound = "3.5"  # For WAV file reading (audio preprocessing)
 cmudict-fast = "0.8"  # For CMU pronouncing dictionary (TTS phonemization)
@@ -89,6 +89,25 @@ num-traits = { version = "0.2", optional = true }  # Required by candle audio
 # crates.io release (mistralrs 0.8.1 or newer) and restore the
 # `dep:mistralrs` wiring in the `llm-mistral*` features below.
 # mistralrs = { version = "0.8", optional = true }
+
+# MLX adapter dep (US-010+). The skeleton in this story uses only the
+# unconditionally-compiled portion of `xybrid-mlx` (MlxError, MlxResult,
+# MlxDtype, EnvelopeSource, EnvelopePayload). The full MLX-linked surface
+# (MlxArray, MlxStream, ops::*) lands in subsequent stories that wire in
+# architecture builders — those will enable `xybrid-mlx/bindings` from this
+# feature once a real MlxArray-touching code path needs it.
+xybrid-mlx = { path = "../xybrid-mlx", optional = true }
+
+# MinimalJinja — used by the MLX adapter's chat template renderer (US-014).
+# Gated behind `llm-mlx` since that's the only consumer today; the GGUF /
+# mistral.rs paths have their own template stacks (minijinja is just the
+# HuggingFace-style template flavor that MLX-LM bundles ship).
+minijinja = { version = "2.5", default-features = false, features = ["builtins", "loader", "serde"], optional = true }
+minijinja-contrib = { version = "2.5", features = ["pycompat"], optional = true }
+# Deterministic RNG for sampling — seeded per-call so the streaming-vs-
+# batched parity test in US-014 produces byte-identical output for the same
+# seed. Kept slim via `default-features = false`.
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 
 [features]
 # `llm-llamacpp` is NOT enabled by default — it requires cmake + a C++
@@ -127,6 +146,23 @@ llm-mistral-cuda = ["llm-mistral"]
 # Requires: vendor/llama.cpp directory with cloned llama.cpp source.
 llm-llamacpp = []
 
+# MLX backend (Apple Silicon only, uses vendor/mlx-apple/mlx.xcframework)
+# Gates the runtime_adapter/mlx module and compile_error!s on non-Apple targets.
+# Mutually compatible with llm-llamacpp; the runtime selector chooses between
+# them at load time (see runtime_adapter/selector.rs, US-016). `dep:safetensors`
+# (US-011+) is pulled in unconditionally alongside the adapter so arch builders
+# can read weight bundles without a second feature flip; `xybrid-mlx/bindings`
+# remains deliberately NOT forwarded here so the skeleton path (dispatch +
+# weight-key validation, no MLX linkage) can be tested without the xcframework.
+# Enable `llm-mlx-runtime` for the full MLX-linked path.
+llm-mlx = ["dep:xybrid-mlx", "dep:safetensors", "dep:minijinja", "dep:minijinja-contrib", "dep:rand"]
+
+# Full MLX runtime — forwards `xybrid-mlx/bindings` so the Qwen/Gemma/LFM
+# architecture builders (US-011+) can actually allocate `MlxArray`s and run
+# the transformer forward pass. Requires `vendor/mlx-apple/mlx.xcframework`
+# to be present (fetched via `tools/scripts/fetch-mlx-xcframework.sh`).
+llm-mlx-runtime = ["llm-mlx", "xybrid-mlx/bindings"]
+
 # dev-tools — exposes test seams (e.g. resource-snapshot providers) for
 # downstream demos, integration tests, and benchmarks. Off by default.
 # Crates that depend on `xybrid-core` enable this when they need to inject
@@ -163,6 +199,12 @@ harness = false
 [[bench]]
 name = "routing_feedback"
 harness = false
+
+# MLX vs llama.cpp LLM backend comparison benchmark.
+[[bench]]
+name = "llm_backend_compare"
+harness = false
+required-features = ["llm-mlx-runtime", "llm-llamacpp"]
 
 # Platform-specific ureq dependencies
 # Non-Android: Use default ureq with TLS

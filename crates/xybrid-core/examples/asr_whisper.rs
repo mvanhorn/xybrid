@@ -129,6 +129,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("❌ Unexpected embedding output: {} dimensions", emb.len());
                 return Err("Expected text output, got embedding".into());
             }
+            EnvelopeKind::TokenIds(ids) => {
+                println!("❌ Unexpected token IDs output: {} ids", ids.len());
+                return Err("Expected text output, got token IDs".into());
+            }
         }
     } else {
         // Load real audio file
@@ -172,6 +176,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             EnvelopeKind::Embedding(emb) => {
                 println!("❌ Unexpected embedding output: {} dimensions", emb.len());
                 return Err("Expected text output, got embedding".into());
+            }
+            EnvelopeKind::TokenIds(ids) => {
+                println!("❌ Unexpected token IDs output: {} ids", ids.len());
+                return Err("Expected text output, got token IDs".into());
             }
         }
     }

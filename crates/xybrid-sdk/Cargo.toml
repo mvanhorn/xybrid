@@ -56,11 +56,11 @@ onnx-inspect = ["dep:ort", "ort/download-binaries", "ort/tls-native"]
 # Android: Dynamic ORT loading + Candle + llama.cpp (mistral.rs has SIGILL issues on ARM)
 platform-android = ["xybrid-core/ort-dynamic", "xybrid-core/llm-llamacpp", "xybrid-core/candle", "llm-llamacpp"]
 
-# iOS: CoreML + Metal acceleration + llama.cpp
-platform-ios = ["xybrid-core/ort-download", "xybrid-core/ort-coreml", "xybrid-core/candle-metal", "xybrid-core/candle-hub", "xybrid-core/llm-llamacpp", "llm-llamacpp"]
+# iOS: CoreML + Metal acceleration + llama.cpp + MLX
+platform-ios = ["xybrid-core/ort-download", "xybrid-core/ort-coreml", "xybrid-core/candle-metal", "xybrid-core/candle-hub", "xybrid-core/llm-llamacpp", "llm-llamacpp", "xybrid-core/llm-mlx", "llm-mlx"]
 
-# macOS: CoreML + Metal + llama.cpp
-platform-macos = ["xybrid-core/ort-download", "xybrid-core/ort-coreml", "xybrid-core/candle-metal", "xybrid-core/candle-hub", "xybrid-core/llm-llamacpp", "llm-llamacpp"]
+# macOS: CoreML + Metal + llama.cpp + MLX
+platform-macos = ["xybrid-core/ort-download", "xybrid-core/ort-coreml", "xybrid-core/candle-metal", "xybrid-core/candle-hub", "xybrid-core/llm-llamacpp", "llm-llamacpp", "xybrid-core/llm-mlx", "llm-mlx"]
 
 # Desktop (Linux/Windows): CPU with llama.cpp
 platform-desktop = ["xybrid-core/ort-download", "xybrid-core/llm-llamacpp", "llm-llamacpp"]
@@ -83,6 +83,7 @@ llm-mistral = ["xybrid-core/llm-mistral"]
 llm-mistral-metal = ["xybrid-core/llm-mistral-metal"]
 llm-mistral-cuda = ["xybrid-core/llm-mistral-cuda"]
 llm-llamacpp = ["xybrid-core/llm-llamacpp"]
+llm-mlx = ["xybrid-core/llm-mlx"]
 
 # Dev-tools (test seams for demos and integration tests)
 dev-tools = ["xybrid-core/dev-tools"]

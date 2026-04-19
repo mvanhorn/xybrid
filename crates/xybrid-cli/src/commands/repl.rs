@@ -655,6 +655,9 @@ fn execute_batch(
                     EnvelopeKind::Embedding(vec) => {
                         ui::ok(&format!("Embedding: {} dimensions", vec.len()));
                     }
+                    EnvelopeKind::TokenIds(ids) => {
+                        ui::ok(&format!("Token IDs: {} tokens", ids.len()));
+                    }
                 }
             }
 

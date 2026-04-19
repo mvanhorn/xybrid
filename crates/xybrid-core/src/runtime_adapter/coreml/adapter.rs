@@ -150,6 +150,10 @@ impl CoreMLRuntimeAdapter {
                 // Embedding similarity or classification
                 Envelope::new(EnvelopeKind::Text("coreml-similarity result".to_string()))
             }
+            EnvelopeKind::TokenIds(_) => {
+                // CoreML LLM prefill (mock)
+                Envelope::new(EnvelopeKind::Text("coreml-tokens output".to_string()))
+            }
         }
     }
 }

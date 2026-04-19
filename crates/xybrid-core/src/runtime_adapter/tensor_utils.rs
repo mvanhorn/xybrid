@@ -56,6 +56,13 @@ pub fn envelope_to_tensors(
         EnvelopeKind::Audio(audio_data) => audio_to_tensor(audio_data, target_shape)?,
         EnvelopeKind::Text(text) => text_to_tensor(text, target_shape)?,
         EnvelopeKind::Embedding(embedding) => embedding_to_tensor(embedding, target_shape)?,
+        EnvelopeKind::TokenIds(_) => {
+            return Err(AdapterError::InvalidInput(
+                "EnvelopeKind::TokenIds cannot be converted to an ONNX f32 tensor; \
+                 it is an internal stage type for the MLX/LLM path"
+                    .to_string(),
+            ));
+        }
     };
 
     let mut result = std::collections::HashMap::new();

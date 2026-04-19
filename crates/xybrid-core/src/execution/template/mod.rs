@@ -22,7 +22,7 @@ pub use metadata::{
 // Re-export step types
 pub use steps::{
     InterpolationMethod, MelScaleType, PhonemizerBackend, PostprocessingStep, PreprocessingStep,
-    TokenizerType,
+    TokenizerBackend, TokenizerType,
 };
 
 // Re-export voice types

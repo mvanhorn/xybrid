@@ -66,6 +66,11 @@ impl PreprocessedData {
                     })?;
                 Ok(PreprocessedData::Tensor(tensor))
             }
+            EnvelopeKind::TokenIds(_) => Err(AdapterError::InvalidInput(
+                "EnvelopeKind::TokenIds is not supported by the generic executor path; \
+                 it is consumed directly by MLX/LLM adapters"
+                    .to_string(),
+            )),
         }
     }
 
@@ -265,6 +270,11 @@ impl RawOutputs {
                 map.insert("output".to_string(), tensor);
                 Ok(RawOutputs::TensorMap(map))
             }
+            EnvelopeKind::TokenIds(_) => Err(AdapterError::InvalidInput(
+                "EnvelopeKind::TokenIds is not supported as a generic raw-output envelope; \
+                 it is an internal stage type produced for the MLX/LLM path"
+                    .to_string(),
+            )),
         }
     }
 }
