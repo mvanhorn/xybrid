@@ -136,12 +136,6 @@ compile_error!(
     - For other platforms: Use `ort-download` (CPU only)"
 );
 
-/// Version of the `xybrid-core` crate, sourced from Cargo metadata at compile time.
-///
-/// Re-exported by `xybrid-sdk` so registry telemetry headers can report the
-/// runtime core version without a parallel constant.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 // llm-mlx uses Apple's MLX framework, which depends on Metal (macOS/iOS only).
 #[cfg(all(feature = "llm-mlx", not(any(target_os = "macos", target_os = "ios"))))]
 compile_error!(
@@ -153,6 +147,12 @@ compile_error!(
     - For Android: Use `llm-llamacpp`\n\
     - For other platforms: Use `llm-llamacpp` or `llm-mistral`"
 );
+
+/// Version of the `xybrid-core` crate, sourced from Cargo metadata at compile time.
+///
+/// Re-exported by `xybrid-sdk` so registry telemetry headers can report the
+/// runtime core version without a parallel constant.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // ============================================================================
 // Prelude - Common imports for convenience
