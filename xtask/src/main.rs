@@ -1486,7 +1486,10 @@ fn build_xcframework(release: bool, version: &str) -> Result<()> {
 
         // Resolve platform preset for this target (plus any target-specific extras)
         let features = features_for_target(target);
-        println!("Building for {} with features: {}...", description, features);
+        println!(
+            "Building for {} with features: {}...",
+            description, features
+        );
 
         let mut cmd = Command::new("cargo");
         cmd.arg("build")
@@ -1624,7 +1627,10 @@ fn build_xcframework_macos_only(release: bool, version: &str) -> Result<()> {
     for (target, description) in targets.iter() {
         // Resolve platform preset for this target plus any target-specific extras
         let features = features_for_target(target);
-        println!("Building for {} with features: {}...", description, features);
+        println!(
+            "Building for {} with features: {}...",
+            description, features
+        );
 
         let mut cmd = Command::new("cargo");
         cmd.arg("build")
@@ -3288,10 +3294,7 @@ mod tests {
             "platform-ios,llm-mlx"
         );
         // No extras: just the preset
-        assert_eq!(
-            features_for_target("x86_64-apple-darwin"),
-            "platform-macos"
-        );
+        assert_eq!(features_for_target("x86_64-apple-darwin"), "platform-macos");
         assert_eq!(
             features_for_target("aarch64-linux-android"),
             "platform-android"

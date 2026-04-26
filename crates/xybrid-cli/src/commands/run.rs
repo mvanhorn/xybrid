@@ -1127,9 +1127,8 @@ fn print_inference_results(
             if let Some(path) = output_path {
                 let json =
                     serde_json::to_string_pretty(ids).context("Failed to serialize token IDs")?;
-                fs::write(path, json).with_context(|| {
-                    format!("Failed to write token IDs to {}", path.display())
-                })?;
+                fs::write(path, json)
+                    .with_context(|| format!("Failed to write token IDs to {}", path.display()))?;
                 println!();
                 ui::ok(&format!("Token IDs saved to {}", path.display()));
             }
