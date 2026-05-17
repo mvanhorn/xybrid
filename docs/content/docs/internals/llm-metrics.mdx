@@ -16,12 +16,12 @@ guarantees the SDK provides.
 | Field | Unit | Type | Source |
 | --- | --- | --- | --- |
 | `ttft_ms` | ms | `u64` | Local LLM: `Instant` of the first emitted `Response::Chunk` minus the `generate()` start time. Cloud LLM: gateway round-trip time (`client.complete()` start → return). |
-| `tokens_in` | count | `usize` | Local LLM (llama.cpp): `tokens.len()` captured before the streaming loop so it survives mid-stream aborts. Local LLM (mistral): `Usage.prompt_tokens` from the terminal chunk. Cloud LLM: upstream `Usage.prompt_tokens` when populated. |
+| `tokens_in` | count | `usize` | Local LLM (llama.cpp / MLX): prompt token count captured before the streaming loop so it survives mid-stream aborts. Local LLM (mistral): `Usage.prompt_tokens` from the terminal chunk. Cloud LLM: upstream `Usage.prompt_tokens` when populated. |
 | `tokens_generated` | count | `usize` | Local LLM: emitted token count from the streaming telemetry recorder. Cloud LLM: surfaced as `tokens_out` instead — see below. |
-| `tokens_out` | count | `usize` | Cloud LLM only: upstream `Usage.completion_tokens`. The SDK's `extract_llm_token_counts` accepts both `tokens_out` and `tokens_generated` as aliases when hoisting to the platform-event payload top-level. |
+| `tokens_out` | count | `usize` | Cloud LLM only, plus a local-span alias equal to `tokens_generated` for telemetry hoisting. The SDK's `extract_llm_token_counts` accepts both `tokens_out` and `tokens_generated` as aliases when hoisting to the platform-event payload top-level. |
 | `tokens_per_second` | tok/s | `f32` | Wallclock: `tokens_generated / elapsed`. Includes prefill time. |
-| `decode_tps` | tok/s | `f32` | mistralrs `Usage.avg_compl_tok_per_sec` — steady-state decode only. `None` when 0.0 (timing below resolution). |
-| `prefill_tps` | tok/s | `f32` | mistralrs `Usage.avg_prompt_tok_per_sec`. Same zero-filter semantics. |
+| `decode_tps` | tok/s | `f32` | mistralrs `Usage.avg_compl_tok_per_sec` or MLX decode-token throughput after the first emitted token. `None` when timing is below resolution. |
+| `prefill_tps` | tok/s | `f32` | mistralrs `Usage.avg_prompt_tok_per_sec` or MLX prompt-token throughput through TTFT. Same zero-filter semantics. |
 | `mean_itl_ms` | ms | `f32` | Arithmetic mean of inter-chunk `Instant` deltas. `None` when only one chunk was emitted. |
 | `p95_itl_ms` | ms | `u32` | 95th percentile of inter-chunk deltas. Same one-chunk guard. |
 | `emitted_chunks` | count | `u32` | Number of `Response::Chunk` values observed on the stream. |
@@ -67,16 +67,17 @@ and is not LLM-specific.
 
 ## Emission path
 
-1. `MistralBackend::generate` (`core/src/runtime_adapter/llm/mistral.rs`)
-   streams tokens via `stream_chat_request`. On `is_streaming=true`,
-   mistralrs signals completion via the **last `Response::Chunk`** — not
-   `Response::Done`. `ChunkChoice.finish_reason` and
-   `ChatCompletionChunkResponse.usage` are `Some(..)` only on that
-   terminal chunk. A stream that closes without a terminal signal returns
+1. The selected local backend produces `GenerationOutput`. For mistralrs,
+   `MistralBackend::generate` streams tokens via `stream_chat_request`; on
+   `is_streaming=true`, mistralrs signals completion via the **last
+   `Response::Chunk`**. For MLX SafeTensors, `runtime_adapter/mlx/generate.rs`
+   emits `PartialToken`s from the MLX decode loop and derives TTFT,
+   prefill/decode TPS, ITL, emitted-chunk count, and finish reason from that
+   loop. A stream that closes without a terminal signal returns
    `AdapterError::InferenceFailed`; partial text is never published as a
    successful result.
 2. `LlmRuntimeAdapter::execute`
-   (`core/src/runtime_adapter/llm/adapter.rs`) writes each scalar into
+   (`crates/xybrid-core/src/runtime_adapter/llm.rs`) writes each scalar into
    the response envelope's metadata **and** into the active tracing span
    via `add_metadata`. The two destinations are intentional: the envelope
    serves in-process Rust consumers, the tracing span flows to the
@@ -85,9 +86,10 @@ and is not LLM-specific.
 ## Deterministic-by-default
 
 `GenerationConfig::default()` uses `temperature = 0.0`, which selects
-mistralrs's deterministic sampler. Callers that want sampling must
-explicitly set `temperature > 0.0`. This preserves reproducible output
-for tests, caching, and any stage that depends on stable local inference.
+deterministic decoding for local LLM backends that support it. Callers
+that want sampling must explicitly set `temperature > 0.0`. This preserves
+reproducible output for tests, caching, and any stage that depends on
+stable local inference.
 
 ## Guarantees and non-guarantees
 
@@ -101,7 +103,7 @@ for tests, caching, and any stage that depends on stable local inference.
   prompt token count. Other fields require successful completion.
 - **Best-effort**: `decode_tps`, `prefill_tps`, `mean_itl_ms`,
   `p95_itl_ms`. Short prompts on fast hardware occasionally produce
-  `avg_*_tok_per_sec = 0.0` in mistralrs; these are filtered to `None`.
+  timing below the measurement resolution; these are filtered to `None`.
   ITL summaries require at least two emitted chunks.
 - **Not emitted**: raw per-chunk deltas (`inter_chunk_ms`). Kept
   in-process on `GenerationOutput` for Rust debugging; never serialized
@@ -115,9 +117,8 @@ metadata (stage name, duration, model ID).
 
 ## See also
 
-- `core/src/runtime_adapter/llm/mistral.rs` — streaming state machine
-  (`StreamState` + `handle_response`).
-- `core/src/runtime_adapter/llm/adapter.rs` — envelope + tracing emission.
-- `core/src/runtime_adapter/llm/config.rs` — `GenerationConfig` defaults.
-- `core/examples/llm_streaming_metrics.rs` — reference example with soft
-  assertions.
+- `crates/xybrid-core/src/runtime_adapter/llm.rs` — backend abstraction,
+  envelope metadata, tracing emission, and `GenerationConfig`.
+- `crates/xybrid-core/src/runtime_adapter/mlx/generate.rs` — MLX
+  SafeTensors generation loop and streaming metric derivation.
+- `crates/xybrid-core/src/runtime_adapter/mlx/model.rs` — MLX LLM adapter.

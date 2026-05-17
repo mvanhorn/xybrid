@@ -36,6 +36,7 @@ llm-mistral-metal = ["xybrid-sdk/llm-mistral-metal"]
 llm-mistral-cuda = ["xybrid-sdk/llm-mistral-cuda"]
 llm-llamacpp = ["xybrid-sdk/llm-llamacpp"]
 llm-mlx = ["xybrid-sdk/llm-mlx"]
+llm-mlx-runtime = ["llm-mlx", "xybrid-sdk/llm-mlx-runtime"]
 
 # PLATFORM PRESETS (composed from individual features above)
 # This ensures #[cfg(feature = "...")] checks work correctly in this crate
@@ -70,3 +71,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-flame = "0.2"
 
+[dev-dependencies]
+httpmock = "0.7"
+safetensors = "0.4"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }

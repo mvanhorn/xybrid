@@ -20,16 +20,19 @@
 
 use log::{debug, info, warn};
 
-#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
-use super::template::PostprocessingStep;
+#[cfg(feature = "llm-mlx")]
+use super::template::is_mlx_embedding_safetensors_metadata;
 use super::template::{
-    backend_label_from_template, quantization_label_from_metadata, span_kind_from_template,
-    stage_kind_from_task, ExecutionMode, ExecutionTemplate, ModelMetadata, PipelineStage,
+    backend_label_from_template, explicit_llm_backend_hint, is_mlx_llm_safetensors_metadata,
+    quantization_label_from_metadata, span_kind_from_template, stage_kind_from_task, ExecutionMode,
+    ExecutionTemplate, ModelMetadata, PipelineStage,
 };
 use crate::conversation::ConversationContext;
-#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
 use crate::ir::EnvelopeKind;
 use crate::ir::{Envelope, MessageRole};
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+use crate::runtime_adapter::BackendChoice;
 use crate::runtime_adapter::{AdapterError, ModelRuntime};
 use crate::tracing as xybrid_trace;
 use ndarray::ArrayD;
@@ -37,6 +40,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::listener::ExecutionGuard;
+#[cfg(feature = "llm-mlx")]
+use super::strategies::MlxEmbeddingStrategy;
 
 fn mark_execution_terminal(guard: &ExecutionGuard, error: &AdapterError) {
     if error.cloud_fallback_abort_reason().is_some() {
@@ -58,18 +63,139 @@ fn mark_execution_terminal(guard: &ExecutionGuard, error: &AdapterError) {
 /// Call this from each inner LLM span site immediately after `SpanGuard`
 /// so both the non-context and chat-context flows produce the same wire
 /// shape.
-#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
 fn stamp_llm_span_cost_attribution(metadata: &ModelMetadata) {
+    let backend_hint = llm_backend_hint(metadata);
     // Reuse the same resolver the outer `execute:<model_id>` span uses
     // so both spans agree on the canonical wire label — including the
     // GGUF-defaults-to-llamacpp behaviour that lights up unannotated
     // bundles in the registry.
-    let backend_hint = metadata.metadata.get("backend").and_then(|v| v.as_str());
     if let Some(label) = backend_label_from_template(&metadata.execution_template, backend_hint) {
         xybrid_trace::add_metadata("backend", label);
     }
     if let Some(quant) = quantization_label_from_metadata(metadata) {
         xybrid_trace::add_metadata("quantization", quant);
+    }
+}
+
+fn llm_backend_hint(metadata: &ModelMetadata) -> Option<&str> {
+    explicit_llm_backend_hint(metadata).or_else(|| {
+        (cfg!(feature = "llm-mlx") && is_mlx_llm_safetensors_metadata(metadata)).then_some("mlx")
+    })
+}
+
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+fn llm_context_length(metadata: &ModelMetadata) -> usize {
+    metadata
+        .metadata
+        .get("context_length")
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+        })
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(4096)
+}
+
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LlmAdapterCacheKey {
+    model_path: String,
+    backend: String,
+    chat_template: Option<String>,
+    context_length: usize,
+}
+
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+fn llm_cache_backend_key(backend_hint: Option<&str>) -> String {
+    let Some(hint) = backend_hint else {
+        return "auto".to_string();
+    };
+
+    match BackendChoice::parse(hint) {
+        Ok(Some(choice)) => choice.as_str().to_string(),
+        Ok(None) => "auto".to_string(),
+        Err(_) => format!("invalid:{hint}"),
+    }
+}
+
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+fn llm_adapter_cache_key(
+    base_path: &str,
+    model_file: &str,
+    chat_template: Option<&str>,
+    context_length: usize,
+    backend_hint: Option<&str>,
+) -> LlmAdapterCacheKey {
+    let model_path = resolve_llm_model_path(base_path, model_file);
+    let chat_template = chat_template.map(|template| {
+        Path::new(base_path)
+            .join(template)
+            .to_string_lossy()
+            .to_string()
+    });
+
+    LlmAdapterCacheKey {
+        model_path,
+        backend: llm_cache_backend_key(backend_hint),
+        chat_template,
+        context_length,
+    }
+}
+
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+fn llm_config_from_cache_key(key: &LlmAdapterCacheKey) -> LlmConfig {
+    let mut config = LlmConfig::new(key.model_path.clone()).with_context_length(key.context_length);
+    if let Some(template) = &key.chat_template {
+        config = config.with_chat_template(template.clone());
+    }
+    config
+}
+
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+fn llm_execution_spec(
+    metadata: &ModelMetadata,
+) -> Option<(&str, Option<&str>, usize, Option<&str>)> {
+    match &metadata.execution_template {
+        ExecutionTemplate::Gguf {
+            model_file,
+            chat_template,
+            context_length,
+            ..
+        } if cfg!(any(feature = "llm-mistral", feature = "llm-llamacpp")) => Some((
+            model_file.as_str(),
+            chat_template.as_deref(),
+            *context_length,
+            llm_backend_hint(metadata),
+        )),
+        ExecutionTemplate::SafeTensors { .. }
+            if cfg!(feature = "llm-mlx") && is_mlx_llm_safetensors_metadata(metadata) =>
+        {
+            Some(("", None, llm_context_length(metadata), Some("mlx")))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+fn resolve_llm_model_path(base_path: &str, model_file: &str) -> String {
+    if model_file.is_empty() {
+        base_path.to_string()
+    } else {
+        Path::new(base_path)
+            .join(model_file)
+            .to_string_lossy()
+            .to_string()
+    }
+}
+
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+fn llm_trace_model<'a>(base_path: &'a str, model_file: &'a str) -> &'a str {
+    if model_file.is_empty() {
+        base_path
+    } else {
+        model_file
     }
 }
 
@@ -86,7 +212,7 @@ fn stamp_llm_span_cost_attribution(metadata: &ModelMetadata) {
 /// with ground truth (via [`LlmRuntimeAdapter::wire_label`]). Spans
 /// without a wire label (mock/test backends) leave the
 /// template-derived stamp in place.
-#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
 fn stamp_llm_runtime_backend(adapter: &LlmRuntimeAdapter) {
     if let Some(label) = adapter.wire_label() {
         xybrid_trace::add_metadata("backend", label);
@@ -104,12 +230,12 @@ use crate::runtime_adapter::onnx::{
 use crate::runtime_adapter::candle::CandleRuntime;
 
 // Always-available LLM types (defined in runtime_adapter/types.rs)
-#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
 use crate::runtime_adapter::types::{ChatMessage, LlmConfig};
 use crate::runtime_adapter::types::{GenerationConfig, StreamingCallback};
 
 // LLM adapter implementation (only available with LLM features)
-#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
 use crate::runtime_adapter::llm::LlmRuntimeAdapter;
 
 use super::modes::{
@@ -151,14 +277,18 @@ pub struct TemplateExecutor {
     /// Base path for resolving relative model paths
     base_path: String,
     /// Cached LLM adapter to avoid reloading models between executions.
-    /// Stores (model_path, adapter) tuple - reused if model_path matches.
+    /// Stores the load-affecting config key and adapter. Reused only when
+    /// model path, backend hint, chat template, and context length all match.
     /// This field always exists but is only populated when LLM features are enabled.
-    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
-    llm_adapter_cache: Option<(String, LlmRuntimeAdapter)>,
+    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+    llm_adapter_cache: Option<(LlmAdapterCacheKey, LlmRuntimeAdapter)>,
     /// Placeholder for llm_adapter_cache when LLM features are disabled.
     /// This ensures the struct has consistent fields regardless of features.
-    #[cfg(not(any(feature = "llm-mistral", feature = "llm-llamacpp")))]
+    #[cfg(not(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx")))]
     llm_adapter_cache: Option<()>,
+    /// Cached MLX embedding strategy to keep resident weights alive between calls.
+    #[cfg(feature = "llm-mlx")]
+    mlx_embedding_strategy: MlxEmbeddingStrategy,
 }
 
 impl TemplateExecutor {
@@ -208,6 +338,8 @@ impl TemplateExecutor {
             runtimes,
             base_path: base_path.into(),
             llm_adapter_cache: None,
+            #[cfg(feature = "llm-mlx")]
+            mlx_embedding_strategy: MlxEmbeddingStrategy::new(),
         }
     }
 
@@ -323,7 +455,7 @@ impl TemplateExecutor {
         // itself fixes the label. Omitted when the runtime isn't part of
         // the closed set yet (CoreML / TFLite / ModelGraph) so analytics
         // sees "absent" not "guessed".
-        let backend_hint = metadata.metadata.get("backend").and_then(|v| v.as_str());
+        let backend_hint = llm_backend_hint(metadata);
         if let Some(label) = backend_label_from_template(&metadata.execution_template, backend_hint)
         {
             xybrid_trace::add_metadata("backend", label);
@@ -366,7 +498,7 @@ impl TemplateExecutor {
             && metadata
                 .postprocessing
                 .iter()
-                .any(|s| matches!(s, PostprocessingStep::CodecDecode { .. }))
+                .any(|s| matches!(s, super::template::PostprocessingStep::CodecDecode { .. }))
         {
             use super::strategies::{CodecTtsStrategy, ExecutionContext, ExecutionStrategy};
             debug!(
@@ -381,6 +513,49 @@ impl TemplateExecutor {
             return strategy.execute(&mut ctx, metadata, input);
         }
 
+        #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+        if let Some((model_file, chat_template, context_length, backend_hint)) =
+            llm_execution_spec(metadata)
+        {
+            debug!(
+                target: "xybrid_core",
+                "Detected local LLM template, routing to execute_llm()"
+            );
+            debug!(
+                target: "xybrid_core",
+                "LLM model_file: {}, chat_template: {:?}, context_length: {}",
+                llm_trace_model(&self.base_path, model_file),
+                chat_template,
+                context_length
+            );
+
+            return self.execute_llm(
+                metadata,
+                model_file,
+                chat_template,
+                context_length,
+                input,
+                backend_hint,
+                config,
+            );
+        }
+
+        #[cfg(feature = "llm-mlx")]
+        if is_mlx_embedding_safetensors_metadata(metadata) {
+            use super::strategies::{ExecutionContext, ExecutionStrategy};
+            debug!(
+                target: "xybrid_core",
+                "Detected MLX SafeTensors embedding metadata, dispatching to MlxEmbeddingStrategy"
+            );
+            let mut ctx = ExecutionContext {
+                base_path: &self.base_path,
+                runtimes: &mut self.runtimes,
+            };
+            return self
+                .mlx_embedding_strategy
+                .execute(&mut ctx, metadata, input);
+        }
+
         // Step 2: Single Model Execution
         let (runtime_type, model_file) = match &metadata.execution_template {
             ExecutionTemplate::SafeTensors { model_file, .. } => ("candle", model_file.clone()),
@@ -392,44 +567,17 @@ impl TemplateExecutor {
                     "ModelGraph execution should not reach single model path".to_string(),
                 ));
             }
-            #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
-            ExecutionTemplate::Gguf {
-                model_file,
-                chat_template,
-                context_length,
-                ..
-            } => {
-                debug!(
-                    target: "xybrid_core",
-                    "Detected GGUF template, routing to execute_llm()"
-                );
-                debug!(
-                    target: "xybrid_core",
-                    "GGUF model_file: {}, chat_template: {:?}, context_length: {}",
-                    model_file,
-                    chat_template,
-                    context_length
-                );
-
-                // Extract backend hint from metadata (e.g., "llamacpp" for Gemma 3)
-                let backend_hint = metadata.metadata.get("backend").and_then(|v| v.as_str());
-
-                // LLM execution via LlmRuntimeAdapter
-                return self.execute_llm(
-                    metadata,
-                    model_file,
-                    chat_template.as_deref(),
-                    *context_length,
-                    input,
-                    backend_hint,
-                    config,
-                );
-            }
             #[cfg(not(any(feature = "llm-mistral", feature = "llm-llamacpp")))]
             ExecutionTemplate::Gguf { .. } => {
                 return Err(AdapterError::RuntimeError(
-                    "GGUF/LLM execution requires the 'llm-mistral' or 'llm-llamacpp' feature"
+                    "GGUF/LLM execution requires the 'llm-mistral' or 'llm-llamacpp' feature; 'llm-mlx' supports MLX SafeTensors, not GGUF"
                         .to_string(),
+                ));
+            }
+            #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+            ExecutionTemplate::Gguf { .. } => {
+                return Err(AdapterError::RuntimeError(
+                    "GGUF/LLM execution should have been handled by the local LLM path".to_string(),
                 ));
             }
         };
@@ -630,13 +778,10 @@ impl TemplateExecutor {
             }
         }
 
-        // Check if this is a GGUF (LLM) model
-        #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
-        if let ExecutionTemplate::Gguf {
-            model_file,
-            context_length,
-            ..
-        } = &metadata.execution_template
+        // Check if this is a local LLM model
+        #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+        if let Some((model_file, chat_template, context_length, backend_hint)) =
+            llm_execution_spec(metadata)
         {
             debug!(
                 target: "xybrid_core",
@@ -675,12 +820,11 @@ impl TemplateExecutor {
                 chat_messages.len()
             );
 
-            let backend_hint = metadata.metadata.get("backend").and_then(|v| v.as_str());
-
             let mut result = self.execute_llm_with_messages(
                 metadata,
                 model_file,
-                *context_length,
+                chat_template,
+                context_length,
                 &chat_messages,
                 backend_hint,
                 config,
@@ -711,10 +855,11 @@ impl TemplateExecutor {
     /// generated token during LLM inference. For non-LLM models, falls back to
     /// regular execution without streaming.
     ///
-    /// **Note**: This method signature is always available, but streaming only
-    /// works when the `llm-mistral` or `llm-llamacpp` feature is enabled.
-    /// Without these features, the callback is ignored and regular execution
-    /// is used.
+    /// **Note**: This method signature is always available, but token
+    /// streaming only works for GGUF when `llm-mistral` or `llm-llamacpp` is
+    /// enabled, and for MLX SafeTensors when `llm-mlx-runtime` is available on
+    /// Apple Silicon macOS. Otherwise the callback is ignored or the runtime
+    /// gate is surfaced by the selected backend.
     ///
     /// # Arguments
     ///
@@ -759,23 +904,17 @@ impl TemplateExecutor {
         #[allow(unused_variables)] on_token: StreamingCallback<'_>,
         #[allow(unused_variables)] config: Option<&GenerationConfig>,
     ) -> ExecutorResult<Envelope> {
-        #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+        #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
         {
-            // Only GGUF (LLM) templates support streaming
-            if let super::template::ExecutionTemplate::Gguf {
-                model_file,
-                chat_template,
-                context_length,
-                ..
-            } = &metadata.execution_template
+            // Local LLM templates support streaming
+            if let Some((model_file, chat_template, context_length, backend_hint)) =
+                llm_execution_spec(metadata)
             {
-                let backend_hint = metadata.metadata.get("backend").and_then(|v| v.as_str());
-
                 return self.execute_llm_streaming(
                     metadata,
                     model_file,
-                    chat_template.as_deref(),
-                    *context_length,
+                    chat_template,
+                    context_length,
                     input,
                     backend_hint,
                     on_token,
@@ -790,7 +929,7 @@ impl TemplateExecutor {
             );
         }
 
-        #[cfg(not(any(feature = "llm-mistral", feature = "llm-llamacpp")))]
+        #[cfg(not(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx")))]
         {
             debug!(
                 target: "xybrid_core",
@@ -807,10 +946,11 @@ impl TemplateExecutor {
     /// The context provides previous messages which are formatted into the prompt
     /// before streaming inference begins.
     ///
-    /// **Note**: This method signature is always available, but streaming only
-    /// works when the `llm-mistral` or `llm-llamacpp` feature is enabled.
-    /// Without these features, the callback is ignored and regular execution
-    /// with context is used.
+    /// **Note**: This method signature is always available, but token
+    /// streaming only works for GGUF when `llm-mistral` or `llm-llamacpp` is
+    /// enabled, and for MLX SafeTensors when `llm-mlx-runtime` is available on
+    /// Apple Silicon macOS. Otherwise the callback is ignored or the runtime
+    /// gate is surfaced by the selected backend.
     ///
     /// # Arguments
     ///
@@ -886,14 +1026,11 @@ impl TemplateExecutor {
             }
         }
 
-        #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+        #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
         {
-            // Check if this is a GGUF (LLM) model
-            if let ExecutionTemplate::Gguf {
-                model_file,
-                context_length,
-                ..
-            } = &metadata.execution_template
+            // Check if this is a local LLM model
+            if let Some((model_file, chat_template, context_length, backend_hint)) =
+                llm_execution_spec(metadata)
             {
                 debug!(
                     target: "xybrid_core",
@@ -930,13 +1067,11 @@ impl TemplateExecutor {
                     chat_messages.len()
                 );
 
-                // Execute streaming with ChatMessages directly
-                let backend_hint = metadata.metadata.get("backend").and_then(|v| v.as_str());
-
                 let result = self.execute_llm_streaming_with_messages(
                     metadata,
                     model_file,
-                    *context_length,
+                    chat_template,
+                    context_length,
                     &chat_messages,
                     backend_hint,
                     on_token,
@@ -960,7 +1095,7 @@ impl TemplateExecutor {
             Ok(result)
         }
 
-        #[cfg(not(any(feature = "llm-mistral", feature = "llm-llamacpp")))]
+        #[cfg(not(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx")))]
         {
             debug!(
                 target: "xybrid_core",
@@ -972,7 +1107,7 @@ impl TemplateExecutor {
     }
 
     /// Execute LLM inference with streaming.
-    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
     fn execute_llm_streaming(
         &mut self,
         metadata: &ModelMetadata,
@@ -989,38 +1124,36 @@ impl TemplateExecutor {
         info!(
             target: "xybrid_core",
             "Executing LLM inference with streaming: {} (backend: {:?})",
-            model_file,
+            llm_trace_model(&self.base_path, model_file),
             backend_hint.unwrap_or("default")
         );
 
         let _llm_span = xybrid_trace::SpanGuard::new("llm_inference_streaming");
-        xybrid_trace::add_metadata("model", model_file);
+        xybrid_trace::add_metadata("model", llm_trace_model(&self.base_path, model_file));
         xybrid_trace::add_metadata("streaming", "true");
         stamp_llm_span_cost_attribution(metadata);
 
-        // Build full model path
-        let model_path = Path::new(&self.base_path).join(model_file);
-        let model_path_str = model_path.to_string_lossy().to_string();
+        let cache_key = llm_adapter_cache_key(
+            &self.base_path,
+            model_file,
+            chat_template,
+            context_length,
+            backend_hint,
+        );
 
-        // Check if we have a cached adapter for this model path
+        // Check if we have a cached adapter for this exact load configuration.
         let need_load = match &self.llm_adapter_cache {
-            Some((cached_path, _)) if cached_path == &model_path_str => false,
+            Some((cached_key, _)) if cached_key == &cache_key => false,
             _ => true,
         };
 
         // Load model if needed
         if need_load {
-            let mut config =
-                LlmConfig::new(model_path_str.clone()).with_context_length(context_length);
-
-            if let Some(template) = chat_template {
-                let template_path = Path::new(&self.base_path).join(template);
-                config = config.with_chat_template(template_path.to_string_lossy().to_string());
-            }
+            let config = llm_config_from_cache_key(&cache_key);
 
             let mut adapter = LlmRuntimeAdapter::with_backend_hint(backend_hint)?;
             adapter.load_model_with_config(&config)?;
-            self.llm_adapter_cache = Some((model_path_str.clone(), adapter));
+            self.llm_adapter_cache = Some((cache_key.clone(), adapter));
         }
 
         // Extract prompt from input
@@ -1117,11 +1250,12 @@ impl TemplateExecutor {
     ///
     /// Used by `execute_with_context` to pass conversation history
     /// to the LLM without our custom template formatting.
-    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
     fn execute_llm_with_messages(
         &mut self,
         metadata: &ModelMetadata,
         model_file: &str,
+        chat_template: Option<&str>,
         context_length: usize,
         messages: &[ChatMessage],
         backend_hint: Option<&str>,
@@ -1131,32 +1265,36 @@ impl TemplateExecutor {
             target: "xybrid_core",
             "Executing LLM with {} ChatMessages: {} (backend: {:?})",
             messages.len(),
-            model_file,
+            llm_trace_model(&self.base_path, model_file),
             backend_hint.unwrap_or("default")
         );
 
         let _llm_span = xybrid_trace::SpanGuard::new("llm_inference_with_messages");
-        xybrid_trace::add_metadata("model", model_file);
+        xybrid_trace::add_metadata("model", llm_trace_model(&self.base_path, model_file));
         xybrid_trace::add_metadata("message_count", messages.len().to_string());
         stamp_llm_span_cost_attribution(metadata);
 
-        // Build full model path
-        let model_path = Path::new(&self.base_path).join(model_file);
-        let model_path_str = model_path.to_string_lossy().to_string();
+        let cache_key = llm_adapter_cache_key(
+            &self.base_path,
+            model_file,
+            chat_template,
+            context_length,
+            backend_hint,
+        );
 
-        // Check if we have a cached adapter for this model path
+        // Check if we have a cached adapter for this exact load configuration.
         let need_load = match &self.llm_adapter_cache {
-            Some((cached_path, _)) if cached_path == &model_path_str => false,
+            Some((cached_key, _)) if cached_key == &cache_key => false,
             _ => true,
         };
 
         // Load model if needed
         if need_load {
-            let config = LlmConfig::new(model_path_str.clone()).with_context_length(context_length);
+            let config = llm_config_from_cache_key(&cache_key);
 
             let mut adapter = LlmRuntimeAdapter::with_backend_hint(backend_hint)?;
             adapter.load_model_with_config(&config)?;
-            self.llm_adapter_cache = Some((model_path_str.clone(), adapter));
+            self.llm_adapter_cache = Some((cache_key.clone(), adapter));
         }
 
         // Use explicit config or fall back to defaults
@@ -1214,11 +1352,12 @@ impl TemplateExecutor {
     ///
     /// Used by `execute_streaming_with_context` to pass conversation history
     /// to the LLM without our custom template formatting.
-    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
     fn execute_llm_streaming_with_messages(
         &mut self,
         metadata: &ModelMetadata,
         model_file: &str,
+        chat_template: Option<&str>,
         context_length: usize,
         messages: &[ChatMessage],
         backend_hint: Option<&str>,
@@ -1231,32 +1370,36 @@ impl TemplateExecutor {
             target: "xybrid_core",
             "Executing LLM streaming with {} ChatMessages: {} (backend: {:?})",
             messages.len(),
-            model_file,
+            llm_trace_model(&self.base_path, model_file),
             backend_hint.unwrap_or("default")
         );
 
         let _llm_span = xybrid_trace::SpanGuard::new("llm_inference_streaming_with_messages");
-        xybrid_trace::add_metadata("model", model_file);
+        xybrid_trace::add_metadata("model", llm_trace_model(&self.base_path, model_file));
         xybrid_trace::add_metadata("message_count", messages.len().to_string());
         stamp_llm_span_cost_attribution(metadata);
 
-        // Build full model path
-        let model_path = Path::new(&self.base_path).join(model_file);
-        let model_path_str = model_path.to_string_lossy().to_string();
+        let cache_key = llm_adapter_cache_key(
+            &self.base_path,
+            model_file,
+            chat_template,
+            context_length,
+            backend_hint,
+        );
 
-        // Check if we have a cached adapter for this model path
+        // Check if we have a cached adapter for this exact load configuration.
         let need_load = match &self.llm_adapter_cache {
-            Some((cached_path, _)) if cached_path == &model_path_str => false,
+            Some((cached_key, _)) if cached_key == &cache_key => false,
             _ => true,
         };
 
         // Load model if needed
         if need_load {
-            let config = LlmConfig::new(model_path_str.clone()).with_context_length(context_length);
+            let config = llm_config_from_cache_key(&cache_key);
 
             let mut adapter = LlmRuntimeAdapter::with_backend_hint(backend_hint)?;
             adapter.load_model_with_config(&config)?;
-            self.llm_adapter_cache = Some((model_path_str.clone(), adapter));
+            self.llm_adapter_cache = Some((cache_key.clone(), adapter));
         }
 
         // Use explicit config or fall back to defaults
@@ -1314,7 +1457,7 @@ impl TemplateExecutor {
     /// The adapter is cached to avoid reloading the model on subsequent calls
     /// with the same model path. This provides significant speedup for REPL
     /// and interactive use cases.
-    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
     fn execute_llm(
         &mut self,
         metadata: &ModelMetadata,
@@ -1328,12 +1471,12 @@ impl TemplateExecutor {
         info!(
             target: "xybrid_core",
             "Executing LLM inference: {} (backend: {:?})",
-            model_file,
+            llm_trace_model(&self.base_path, model_file),
             backend_hint.unwrap_or("default")
         );
 
         let _llm_span = xybrid_trace::SpanGuard::new("llm_inference");
-        xybrid_trace::add_metadata("model", model_file);
+        xybrid_trace::add_metadata("model", llm_trace_model(&self.base_path, model_file));
         // Stamp the canonical `backend` + `quantization` labels onto the
         // inner LLM span. The SDK telemetry hoist reads from any span in
         // the trace; the outer `execute:<model_id>` span set up by
@@ -1343,22 +1486,27 @@ impl TemplateExecutor {
         // entry points.
         stamp_llm_span_cost_attribution(metadata);
 
-        // Build full model path
-        let model_path = Path::new(&self.base_path).join(model_file);
-        let model_path_str = model_path.to_string_lossy().to_string();
+        let cache_key = llm_adapter_cache_key(
+            &self.base_path,
+            model_file,
+            chat_template,
+            context_length,
+            backend_hint,
+        );
+        let model_path_str = cache_key.model_path.clone();
 
-        // Check if we have a cached adapter for this model path
+        // Check if we have a cached adapter for this exact load configuration.
         let need_load = match &self.llm_adapter_cache {
-            Some((cached_path, _)) if cached_path == &model_path_str => {
+            Some((cached_key, _)) if cached_key == &cache_key => {
                 info!(target: "xybrid_core", "Reusing cached LLM adapter for: {}", model_path_str);
                 false
             }
-            Some((cached_path, _)) => {
+            Some((cached_key, _)) => {
                 info!(
                     target: "xybrid_core",
-                    "Model path changed ({} -> {}), loading new model",
-                    cached_path,
-                    model_path_str
+                    "LLM load config changed ({:?} -> {:?}), loading new model",
+                    cached_key,
+                    cache_key
                 );
                 true
             }
@@ -1370,21 +1518,14 @@ impl TemplateExecutor {
 
         // Load model if needed (cache miss or different model)
         if need_load {
-            // Create LLM config
-            let mut config =
-                LlmConfig::new(model_path_str.clone()).with_context_length(context_length);
-
-            if let Some(template) = chat_template {
-                let template_path = Path::new(&self.base_path).join(template);
-                config = config.with_chat_template(template_path.to_string_lossy().to_string());
-            }
+            let config = llm_config_from_cache_key(&cache_key);
 
             // Create adapter with the appropriate backend based on hint
             let mut adapter = LlmRuntimeAdapter::with_backend_hint(backend_hint)?;
             adapter.load_model_with_config(&config)?;
 
             // Cache the adapter
-            self.llm_adapter_cache = Some((model_path_str.clone(), adapter));
+            self.llm_adapter_cache = Some((cache_key.clone(), adapter));
         }
 
         // Build generation config: explicit config wins, then envelope metadata, then defaults
@@ -2201,7 +2342,7 @@ impl Default for TemplateExecutor {
 // the executor layer so all four paths surface the 9 LLM scalars the
 // consuming analytics backend expects on every LLM span.
 
-#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
 fn insert_llm_streaming_metrics(
     response_metadata: &mut HashMap<String, String>,
     output: &crate::runtime_adapter::llm::GenerationOutput,
@@ -2226,7 +2367,7 @@ fn insert_llm_streaming_metrics(
     }
 }
 
-#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+#[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
 fn mirror_llm_metrics_to_span(
     output: &crate::runtime_adapter::llm::GenerationOutput,
     backend_name: &str,
@@ -2340,6 +2481,269 @@ mod tests {
         let executor = TemplateExecutor::with_runtimes("/test", runtimes);
         assert_eq!(executor.base_path, "/test");
         assert!(executor.list_runtimes().is_empty());
+    }
+
+    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp", feature = "llm-mlx"))]
+    #[test]
+    fn test_llm_adapter_cache_key_tracks_backend_and_load_config() {
+        let base = llm_adapter_cache_key(
+            "/models",
+            "model.gguf",
+            Some("chat-template.json"),
+            2048,
+            Some("llama_cpp"),
+        );
+        let backend_alias = llm_adapter_cache_key(
+            "/models",
+            "model.gguf",
+            Some("chat-template.json"),
+            2048,
+            Some("llamacpp"),
+        );
+        assert_eq!(
+            base, backend_alias,
+            "backend aliases should share the same cache entry"
+        );
+
+        let auto_backend = llm_adapter_cache_key(
+            "/models",
+            "model.gguf",
+            Some("chat-template.json"),
+            2048,
+            None,
+        );
+        assert_ne!(
+            base, auto_backend,
+            "explicit backend changes must not reuse an auto backend adapter"
+        );
+
+        let other_template = llm_adapter_cache_key(
+            "/models",
+            "model.gguf",
+            Some("other.json"),
+            2048,
+            Some("llamacpp"),
+        );
+        assert_ne!(
+            base, other_template,
+            "chat template changes require a reload"
+        );
+
+        let other_context = llm_adapter_cache_key(
+            "/models",
+            "model.gguf",
+            Some("chat-template.json"),
+            4096,
+            Some("llamacpp"),
+        );
+        assert_ne!(
+            base, other_context,
+            "context length changes require a reload"
+        );
+
+        let config = llm_config_from_cache_key(&base);
+        assert_eq!(config.model_path, "/models/model.gguf");
+        assert_eq!(
+            config.chat_template.as_deref(),
+            Some("/models/chat-template.json")
+        );
+        assert_eq!(config.context_length, 2048);
+    }
+
+    #[cfg(all(
+        feature = "llm-mlx",
+        not(any(feature = "llm-mistral", feature = "llm-llamacpp"))
+    ))]
+    #[test]
+    fn test_llm_execution_spec_does_not_route_gguf_without_gguf_backend() {
+        let metadata = ModelMetadata {
+            model_id: "llama-gguf".to_string(),
+            version: "1.0".to_string(),
+            execution_template: ExecutionTemplate::Gguf {
+                model_file: "model.gguf".to_string(),
+                chat_template: None,
+                context_length: 4096,
+                generation_params: None,
+            },
+            preprocessing: vec![],
+            postprocessing: vec![],
+            files: vec!["model.gguf".to_string()],
+            description: None,
+            backend: None,
+            metadata: HashMap::new(),
+            voices: None,
+            max_chunk_chars: None,
+            trim_trailing_samples: None,
+        };
+
+        assert!(
+            llm_execution_spec(&metadata).is_none(),
+            "non-linking llm-mlx builds must not route GGUF into the MLX adapter"
+        );
+
+        let mut executor = TemplateExecutor::with_runtimes("/missing/model-dir", HashMap::new());
+        let err = executor
+            .execute(
+                &metadata,
+                &Envelope::new(EnvelopeKind::Text("hello".to_string())),
+                None,
+            )
+            .expect_err("GGUF without a GGUF backend feature should fail before model loading");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("'llm-mistral' or 'llm-llamacpp'"),
+            "expected a GGUF backend feature error, got {msg}"
+        );
+        assert!(
+            !msg.contains("config.json"),
+            "GGUF metadata must not be interpreted as an MLX bundle: {msg}"
+        );
+    }
+
+    #[cfg(any(feature = "llm-mistral", feature = "llm-llamacpp"))]
+    #[test]
+    fn test_llm_execution_spec_routes_gguf_when_gguf_backend_is_compiled() {
+        let metadata = ModelMetadata {
+            model_id: "llama-gguf".to_string(),
+            version: "1.0".to_string(),
+            execution_template: ExecutionTemplate::Gguf {
+                model_file: "model.gguf".to_string(),
+                chat_template: Some("chat-template.json".to_string()),
+                context_length: 2048,
+                generation_params: None,
+            },
+            preprocessing: vec![],
+            postprocessing: vec![],
+            files: vec!["model.gguf".to_string()],
+            description: None,
+            backend: Some("llamacpp".to_string()),
+            metadata: HashMap::new(),
+            voices: None,
+            max_chunk_chars: None,
+            trim_trailing_samples: None,
+        };
+
+        let (model_file, chat_template, context_length, backend_hint) =
+            llm_execution_spec(&metadata).expect("GGUF should route with a GGUF backend feature");
+
+        assert_eq!(model_file, "model.gguf");
+        assert_eq!(chat_template, Some("chat-template.json"));
+        assert_eq!(context_length, 2048);
+        assert_eq!(backend_hint, Some("llamacpp"));
+    }
+
+    #[cfg(feature = "llm-mlx")]
+    #[test]
+    fn test_llm_execution_spec_routes_mlx_safetensors_to_bundle_root() {
+        let metadata = ModelMetadata {
+            model_id: "qwen3.5-0.6b-mlx".to_string(),
+            version: "1.0".to_string(),
+            execution_template: ExecutionTemplate::SafeTensors {
+                model_file: "model.safetensors".to_string(),
+                architecture: Some("qwen3".to_string()),
+                config_file: Some("config.json".to_string()),
+                tokenizer_file: Some("tokenizer.json".to_string()),
+            },
+            preprocessing: vec![],
+            postprocessing: vec![],
+            files: vec![
+                "config.json".to_string(),
+                "tokenizer.json".to_string(),
+                "model.safetensors".to_string(),
+            ],
+            description: None,
+            backend: Some("mlx".to_string()),
+            metadata: HashMap::new(),
+            voices: None,
+            max_chunk_chars: None,
+            trim_trailing_samples: None,
+        };
+
+        let (model_file, chat_template, context_length, backend_hint) =
+            llm_execution_spec(&metadata).expect("MLX SafeTensors should route as local LLM");
+
+        assert_eq!(model_file, "");
+        assert_eq!(chat_template, None);
+        assert_eq!(context_length, 4096);
+        assert_eq!(backend_hint, Some("mlx"));
+        assert_eq!(
+            resolve_llm_model_path("/bundle/qwen", model_file),
+            "/bundle/qwen"
+        );
+    }
+
+    #[cfg(feature = "llm-mlx")]
+    #[test]
+    fn test_llm_execution_spec_routes_auto_qwen_mlx_safetensors() {
+        let metadata = ModelMetadata {
+            model_id: "qwen3.5-0.6b-mlx".to_string(),
+            version: "1.0".to_string(),
+            execution_template: ExecutionTemplate::SafeTensors {
+                model_file: "model.safetensors".to_string(),
+                architecture: Some("qwen3".to_string()),
+                config_file: Some("config.json".to_string()),
+                tokenizer_file: Some("tokenizer.json".to_string()),
+            },
+            preprocessing: vec![],
+            postprocessing: vec![],
+            files: vec![
+                "config.json".to_string(),
+                "tokenizer.json".to_string(),
+                "model.safetensors".to_string(),
+            ],
+            description: None,
+            backend: Some("auto".to_string()),
+            metadata: HashMap::from([("context_length".to_string(), serde_json::json!(8192))]),
+            voices: None,
+            max_chunk_chars: None,
+            trim_trailing_samples: None,
+        };
+
+        let (model_file, chat_template, context_length, backend_hint) =
+            llm_execution_spec(&metadata).expect("auto MLX SafeTensors should route as local LLM");
+
+        assert_eq!(model_file, "");
+        assert_eq!(chat_template, None);
+        assert_eq!(context_length, 8192);
+        assert_eq!(backend_hint, Some("mlx"));
+        assert_eq!(
+            resolve_llm_model_path("/bundle/qwen", model_file),
+            "/bundle/qwen"
+        );
+    }
+
+    #[cfg(feature = "llm-mlx")]
+    #[test]
+    fn test_executor_dispatches_mlx_embedding_before_generic_safetensors_runtime() {
+        let mut metadata = ModelMetadata::safetensors(
+            "nomic-embed-text",
+            "1.0",
+            "model.safetensors",
+            "nomic_bert",
+        );
+        metadata
+            .metadata
+            .insert("task".to_string(), serde_json::json!("text-embedding"));
+        metadata.backend = Some("auto".to_string());
+
+        let mut executor = TemplateExecutor::with_runtimes("/missing/model-dir", HashMap::new());
+        let err = executor
+            .execute(
+                &metadata,
+                &Envelope::new(EnvelopeKind::Text("hello".to_string())),
+                None,
+            )
+            .expect_err("missing MLX bundle should fail inside the MLX embedding strategy");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("config.json"),
+            "expected MLX embedding adapter to validate the bundle root, got {msg}"
+        );
+        assert!(
+            !msg.contains("candle"),
+            "MLX embedding metadata must not fall through to the generic SafeTensors runtime: {msg}"
+        );
     }
 
     #[test]
@@ -2960,6 +3364,7 @@ mod tests {
                 postprocessing: Vec::new(),
                 files: Vec::new(),
                 description: None,
+                backend: None,
                 metadata: bundle_metadata,
                 voices: None,
                 max_chunk_chars: None,

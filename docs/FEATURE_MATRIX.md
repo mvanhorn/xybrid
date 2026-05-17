@@ -32,8 +32,8 @@ This document provides a comprehensive reference for all feature flags, platform
 | **llm-mistral-metal** | mistral.rs with Metal acceleration | `llm-mistral`, `mistralrs/metal` |
 | **llm-mistral-cuda** | mistral.rs with CUDA acceleration | `llm-mistral`, `mistralrs/cuda` |
 | **llm-llamacpp** | llama.cpp backend (Android-compatible) | *(marker feature - triggers build.rs)* |
-| **llm-mlx** | MLX backend skeleton (config parsing, weight enumeration, registry wiring) — Apple Silicon only | `xybrid-mlx`, `safetensors`, `minijinja`, `rand` |
-| **llm-mlx-runtime** | MLX runtime (real forward pass via Metal) — Apple Silicon only | `llm-mlx`, `xybrid-mlx/bindings` |
+| **llm-mlx** | MLX SafeTensors metadata, selector, tokenizer, weight-validation, and adapter routing tier — cross-platform, no MLX linkage | `xybrid-mlx`, `safetensors`, `minijinja`, `rand` |
+| **llm-mlx-runtime** | MLX SafeTensors LLM and embedding forward pass via Metal — Apple Silicon Mac runtime; iOS remains staged until upstream MLX ships Metal-enabled iOS slices | `llm-mlx`, `xybrid-mlx/bindings` |
 
 ### Notes
 
@@ -43,20 +43,46 @@ This document provides a comprehensive reference for all feature flags, platform
   3. Requires `vendor/llama.cpp` directory with cloned llama.cpp source
 
 - `llm-mlx` gates the `runtime_adapter/mlx` module (config parsing, tokenizer,
-  chat template, sampler, weight-key enumeration) and pulls in `safetensors`,
-  `minijinja`, and `rand` as optional deps. It is **mutually compatible** with
-  `llm-llamacpp` — both can be enabled in the same build and the runtime selector
-  (`runtime_adapter/selector`) picks MLX on Apple Silicon when the model registry
-  has an `mlx` variant; otherwise it falls through to llama.cpp. A `compile_error!`
-  fires if this feature is enabled on a non-Apple target.
+  chat template, sampler, weight-key validation, selector/error surfaces, and
+  TemplateExecutor strategy routing) and pulls in `safetensors`, `minijinja`,
+  and `rand` as optional deps. It is **mutually compatible** with
+  `llm-llamacpp` — both can be enabled in the same build. Local SafeTensors
+  metadata routes to the MLX adapter when `backend: mlx` is set or when
+  `backend: auto` / absent metadata names a supported MLX LLM architecture
+  (`qwen3`, `gemma4`, `lfm2`, `lfm`, `lfm3`) or a supported embedding
+  architecture (`bert`, `nomic_bert`). The forward pass is gated separately:
+  with `llm-mlx-runtime` on Apple Silicon macOS it executes real MLX LLM and
+  embedding inference; without that runtime gate the same routes return a
+  pointed `NotImplemented` error instead of linking MLX. Explicit SDK/CLI
+  registry backend overrides request the matching artifact format before
+  loading for LLM tasks (`mlx` -> `safetensors`, `llamacpp` -> `gguf`); known
+  registry embedding tasks reject explicit non-MLX local backends until a
+  non-MLX embedding runtime exists. Automatic registry loading through the Rust
+  SDK model loader, SDK pipelines, `xybrid run`, and `xybrid fetch` also asks
+  the selector before fetching LLM and embedding models, preferring SafeTensors
+  on Apple Silicon runtime builds when the registry advertises that variant.
+  LLM fallbacks can request GGUF variants; embedding fallbacks keep the registry
+  default because the local llama.cpp adapter does not currently emit embedding
+  envelopes. This feature intentionally compiles on non-Apple targets because
+  it does not enable `xybrid-mlx/bindings` or link MLX.
 
 - `llm-mlx-runtime` is the *real* MLX forward-pass gate — it forwards
   `xybrid-mlx/bindings` which statically links the `mlx.xcframework` plus Metal,
-  MetalPerformanceShaders, Foundation, and Accelerate. Fetched by
-  `tools/scripts/fetch-mlx-xcframework.sh`. See `vendor/mlx-apple/README.md` and
-  [`backends/mlx.md`](backends/mlx.md). Without `llm-mlx-runtime`, the skeleton
-  paths compile cross-platform and LLM generate / embedding run paths surface a
-  pointed `NotImplemented` error naming the feature gate and the fetch script.
+  MetalPerformanceShaders, Foundation, and Accelerate. It can use
+  `tools/scripts/fetch-mlx-xcframework.sh` when a download pin is available,
+  or source-build the macOS arm64 slice from pinned upstream SHAs with
+  `tools/scripts/build-local-mlx-xcframework.sh`. Runtime CI and local Apple
+  Silicon validation do not require a published xcframework artifact; the source
+  build path is the authoritative fallback while the artifact pin is
+  `unpublished`. The currently validated runtime target is Apple Silicon macOS;
+  iOS slices are link-layout artifacts only because pinned upstream MLX disables
+  Metal for `CMAKE_SYSTEM_NAME=iOS`. See `vendor/mlx-apple/README.md` and
+  [`backends/mlx.md`](backends/mlx.md).
+  Enabling `llm-mlx-runtime` outside `aarch64-apple-darwin`, including current
+  iOS builds, is a compile-time error.
+  Without `llm-mlx-runtime`, the non-linking MLX routes compile cross-platform
+  and LLM generate / embedding run paths surface a pointed `NotImplemented`
+  error naming the feature gate and the xcframework setup scripts.
 
 ---
 
@@ -117,11 +143,11 @@ Platform presets are the **single source of truth** for platform-specific featur
 | Preset | Target Platform | Core Features Enabled | Rationale |
 |--------|-----------------|----------------------|-----------|
 | **platform-android** | Android (all ABIs) | `ort-dynamic`, `candle`, `llm-llamacpp` | Dynamic ORT loading for AAR distribution; Candle (CPU) for Whisper ASR; llama.cpp has runtime SIMD detection; mistral.rs causes SIGILL on devices without ARMv8.2-A FP16 |
-| **platform-ios** | iOS (arm64, simulator) | `ort-download`, `ort-coreml`, `candle-metal`, `llm-llamacpp`, `llm-mlx` | Static ORT linking; CoreML for ANE acceleration; Metal for GPU; MLX for supported LLM architectures (routed at runtime) |
-| **platform-macos** | macOS (arm64, x86_64) | `ort-download`, `ort-coreml`, `candle-metal`, `llm-llamacpp`, `llm-mlx` | Same as iOS — unified Apple platform features |
+| **platform-ios** | iOS (arm64, simulator) | `ort-download`, `ort-coreml`, `candle-metal`, `llm-llamacpp`, `llm-mlx` | Static ORT linking; CoreML for ANE acceleration; Metal for Candle; non-linking MLX metadata/registry/selector parity while real MLX runtime remains staged |
+| **platform-macos** | macOS (arm64, x86_64) | `ort-download`, `ort-coreml`, `candle-metal`, `llm-llamacpp`, `llm-mlx` | Static ORT linking; CoreML/Candle Metal; llama.cpp LLM inference; non-linking MLX metadata/selector support by default, with real Apple Silicon MLX execution available through explicit `llm-mlx-runtime` |
 | **platform-desktop** | Linux, Windows | `ort-download`, `llm-llamacpp` | Static ORT linking; llama.cpp for LLM inference (unified across all platforms) |
 
-> **Note on MLX**: `llm-mlx` is only included in the Apple-platform presets (`platform-ios`, `platform-macos`). It is **mutually compatible** with `llm-llamacpp` — both can be enabled in the same build and the runtime selector chooses between them per model at load time (see US-016). MLX is not added to `platform-android` or `platform-desktop` because MLX links against Metal and Accelerate, which are Apple-only.
+> **Note on MLX**: `llm-mlx` is included in the Apple-platform presets (`platform-ios`, `platform-macos`) for metadata, registry, tokenizer, selector, and local SafeTensors routing parity. It is **mutually compatible** with `llm-llamacpp` — both can be enabled in the same build. Automatic registry loading through the Rust SDK model loader, SDK pipelines, `xybrid run`, `xybrid repl`, and `xybrid fetch` asks the selector before fetching LLM and embedding models, but registry MLX is selected only when `llm-mlx-runtime` is enabled and the Metal runtime probe succeeds. Explicit SDK/CLI registry backend overrides request format-specific variants before loading for LLM tasks, fail when the requested backend is unavailable, and reject known embedding tasks for non-MLX local backends. `llm-mlx` itself is cross-platform and non-linking; `llm-mlx-runtime` is the Apple feature that links Metal/Accelerate through `xybrid-mlx/bindings`, with runtime readiness currently validated on Apple Silicon macOS only. CI can validate that runtime from pinned source SHAs when no published xcframework release exists.
 
 > **Note**: The CLI (`xybrid-cli`) adds `huggingface` to all its platform presets so `xybrid run --huggingface` works in release builds. SDK/FFI presets do not include `huggingface` by default — add it individually if needed.
 
@@ -153,13 +179,15 @@ The following types and modules are conditionally compiled based on feature flag
 
 | Item | Condition | Description |
 |------|-----------|-------------|
-| `LlmRuntimeAdapter` import | `feature = "llm-mistral" OR feature = "llm-llamacpp"` | LLM adapter import |
-| `llm_adapter_cache` field | `feature = "llm-mistral" OR feature = "llm-llamacpp"` | Cached LLM adapter in TemplateExecutor |
-| `ExecutionTemplate::Gguf` handling | `feature = "llm-mistral" OR feature = "llm-llamacpp"` | GGUF model execution path |
-| `execute_streaming()` full impl | `feature = "llm-mistral" OR feature = "llm-llamacpp"` | Streaming with callback |
-| `execute_streaming()` stub | `NOT (llm-mistral OR llm-llamacpp)` | Falls back to regular execution |
+| `LlmRuntimeAdapter` import | `feature = "llm-mistral" OR feature = "llm-llamacpp" OR feature = "llm-mlx"` | LLM adapter import |
+| `llm_adapter_cache` field | `feature = "llm-mistral" OR feature = "llm-llamacpp" OR feature = "llm-mlx"` | Cached LLM adapter in TemplateExecutor |
+| `mlx_embedding_strategy` field | `feature = "llm-mlx"` | Cached MLX embedding strategy in TemplateExecutor |
+| `ExecutionTemplate::Gguf` handling | `feature = "llm-mistral" OR feature = "llm-llamacpp"` | GGUF model execution path; `llm-mlx` alone does not execute GGUF |
+| `ExecutionTemplate::SafeTensors` with `backend: mlx`, or `backend: auto` plus supported MLX LLM / embedding architecture | `feature = "llm-mlx"` | MLX bundle-root execution path |
+| `execute_streaming()` callback-capable impl | `feature = "llm-mistral" OR feature = "llm-llamacpp" OR feature = "llm-mlx"` | Streams for compiled GGUF backends and runtime-ready MLX SafeTensors; non-linking MLX builds surface the MLX runtime gate |
+| `execute_streaming()` stub | `NOT (llm-mistral OR llm-llamacpp OR llm-mlx)` | Falls back to regular execution |
 | `execute_streaming_with_context()` | Same as above | Streaming with conversation context |
-| `execute_llm()` | `feature = "llm-mistral" OR feature = "llm-llamacpp"` | Internal LLM execution |
+| `execute_llm()` | `feature = "llm-mistral" OR feature = "llm-llamacpp" OR feature = "llm-mlx"` | Internal LLM execution |
 | `execute_llm_streaming()` | Same as above | Internal streaming execution |
 
 ### Re-exports in runtime_adapter/mod.rs
@@ -190,8 +218,7 @@ The following feature combinations are invalid and should produce compile-time e
 | `candle-metal` on non-Apple targets | Metal is Apple-only | Use `candle` (CPU) or `candle-cuda` |
 | `candle-cuda` on Apple targets | CUDA not available on Apple | Use `candle-metal` |
 | `ort-coreml` on non-Apple targets | CoreML is Apple-only | Use `ort-download` |
-| `llm-mlx` on non-Apple targets | MLX links against Metal + Accelerate (Apple-only) | Use `llm-llamacpp` |
-| `llm-mlx-runtime` on non-Apple targets | Requires `mlx.xcframework` which ships arm64 Apple slices only | Use `llm-llamacpp` |
+| `llm-mlx-runtime` outside `aarch64-apple-darwin` | Runtime readiness is validated only on Apple Silicon macOS; current iOS slices are link-layout artifacts without Metal runtime readiness | Use `llm-mlx` for selector/docs checks or `llm-llamacpp` for inference |
 
 **Note**: All of the above are enforced at compile time via `compile_error!` guards in `crates/xybrid-core/src/lib.rs` and the cfg-gated module files. See the individual module sources for the exact predicates.
 

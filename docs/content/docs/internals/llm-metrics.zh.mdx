@@ -11,11 +11,13 @@ xybrid SDK 将每次推理的 LLM 遥测数据以字符串键值对的形式写�
 
 | 字段 | 单位 | 类型 | 来源 |
 | --- | --- | --- | --- |
-| `ttft_ms` | ms | `u64` | 首个 `Response::Chunk` 发出时的 `Instant` 减去 `generate()` 开始时间。 |
-| `tokens_generated` | 数量 | `usize` | mistralrs `Usage.completion_tokens`（终止块）。 |
+| `ttft_ms` | ms | `u64` | 本地 LLM 首个流式块发出时的 `Instant` 减去 `generate()` 开始时间；云端 LLM 为 gateway 往返耗时。 |
+| `tokens_in` | 数量 | `usize` | 本地 LLM（llama.cpp / MLX）在流式循环前记录的 prompt token 数；mistralrs 从终止块的 `Usage.prompt_tokens` 读取；云端从上游 `Usage.prompt_tokens` 读取。 |
+| `tokens_generated` | 数量 | `usize` | 本地 LLM 实际发出的 token 数；云端 LLM 使用 `tokens_out`。 |
+| `tokens_out` | 数量 | `usize` | 云端 LLM 的上游 completion token 数；本地 span 也会写入与 `tokens_generated` 相同的别名，便于遥测提升。 |
 | `tokens_per_second` | tok/s | `f32` | 挂钟吞吐量：`tokens_generated / elapsed`，含预填充时间。 |
-| `decode_tps` | tok/s | `f32` | mistralrs `Usage.avg_compl_tok_per_sec` — 仅稳态解码。值为 0.0 时（计时精度不足）返回 `None`。 |
-| `prefill_tps` | tok/s | `f32` | mistralrs `Usage.avg_prompt_tok_per_sec`，同样的零值过滤语义。 |
+| `decode_tps` | tok/s | `f32` | mistralrs `Usage.avg_compl_tok_per_sec`，或 MLX 首个输出 token 之后的解码吞吐量。计时精度不足时返回 `None`。 |
+| `prefill_tps` | tok/s | `f32` | mistralrs `Usage.avg_prompt_tok_per_sec`，或 MLX 从开始到 TTFT 的 prompt 吞吐量。同样的零值过滤语义。 |
 | `mean_itl_ms` | ms | `f32` | 块间 `Instant` 差值的算术平均。仅发出一个块时返回 `None`。 |
 | `p95_itl_ms` | ms | `u32` | 块间差值的第 95 百分位。同样的单块保护。 |
 | `emitted_chunks` | 数量 | `u32` | 流中观察到的 `Response::Chunk` 数量。 |
@@ -54,17 +56,18 @@ if let Some(ttft) = output.metadata.get("ttft_ms") {
 
 ## 发射路径
 
-1. `MistralBackend::generate`（`core/src/runtime_adapter/llm/mistral.rs`）通过 `stream_chat_request` 流式输出 token。当 `is_streaming=true` 时，mistralrs 通过**最后一个 `Response::Chunk`** 而非 `Response::Done` 信号表示完成。`ChunkChoice.finish_reason` 和 `ChatCompletionChunkResponse.usage` 仅在该终止块上为 `Some(..)`。流在没有终止信号的情况下关闭时返回 `AdapterError::InferenceFailed`；部分文本不会作为成功结果发布。
-2. `LlmRuntimeAdapter::execute`（`core/src/runtime_adapter/llm/adapter.rs`）将每个标量写入响应 Envelope 的 metadata **并**通过 `add_metadata` 写入活跃 tracing span。两个目标是有意为之：Envelope 服务于进程内的 Rust 消费者，tracing span 流向遥测管道。
+1. 被选中的本地后端产生 `GenerationOutput`。mistralrs 通过 `stream_chat_request` 流式输出 token，并用**最后一个 `Response::Chunk`** 表示完成。MLX SafeTensors 路径在 `runtime_adapter/mlx/generate.rs` 的解码循环中发出 `PartialToken`，并从该循环推导 TTFT、prefill/decode TPS、ITL、块数量和结束原因。流在没有终止信号的情况下关闭时返回 `AdapterError::InferenceFailed`；部分文本不会作为成功结果发布。
+2. `LlmRuntimeAdapter::execute`（`crates/xybrid-core/src/runtime_adapter/llm.rs`）将每个标量写入响应 Envelope 的 metadata **并**通过 `add_metadata` 写入活跃 tracing span。两个目标是有意为之：Envelope 服务于进程内的 Rust 消费者，tracing span 流向遥测管道。
 
 ## 默认确定性
 
-`GenerationConfig::default()` 使用 `temperature = 0.0`，选择 mistralrs 的确定性采样器。需要采样的调用方必须显式设置 `temperature > 0.0`。这保证了测试、缓存以及依赖稳定本地推理的阶段的输出可复现。
+`GenerationConfig::default()` 使用 `temperature = 0.0`，为支持的本地 LLM 后端选择确定性解码。需要采样的调用方必须显式设置 `temperature > 0.0`。这保证了测试、缓存以及依赖稳定本地推理的阶段的输出可复现。
 
 ## 保证与非保证
 
-- **每次成功 LLM 生成均保证输出**：`ttft_ms`、`tokens_generated`、`tokens_per_second`、`emitted_chunks`、`finish_reason`。
-- **尽力输出**：`decode_tps`、`prefill_tps`、`mean_itl_ms`、`p95_itl_ms`。在快速硬件上短提示偶尔会使 mistralrs 产生 `avg_*_tok_per_sec = 0.0`，这些值会被过滤为 `None`。ITL 汇总需要至少两个发出的块。
+- **每次成功 LLM 生成均保证输出**：`ttft_ms`、`tokens_in`、本地的 `tokens_generated` / 云端的 `tokens_out`、`tokens_per_second`、`emitted_chunks`、`finish_reason`。
+- **即使中途终止也保证输出**：`tokens_in` 会在流式循环前写入 `llm_inference_streaming` span，因此云回退或内存压力导致的本地中止仍能携带 prompt token 数。其他字段需要成功完成。
+- **尽力输出**：`decode_tps`、`prefill_tps`、`mean_itl_ms`、`p95_itl_ms`。短提示在快速硬件上可能低于计时精度，这些值会被过滤为 `None`。ITL 汇总需要至少两个发出的块。
 - **不输出**：原始的每块间隔（`inter_chunk_ms`）。在进程内保留于 `GenerationOutput` 供 Rust 调试使用，不序列化到 Envelope metadata 或 tracing span。
 
 ## 非 LLM 阶段
@@ -73,7 +76,6 @@ if let Some(ttft) = output.metadata.get("ttft_ms") {
 
 ## 相关资源
 
-- `core/src/runtime_adapter/llm/mistral.rs` — 流式状态机（`StreamState` + `handle_response`）
-- `core/src/runtime_adapter/llm/adapter.rs` — Envelope 与 tracing 发射
-- `core/src/runtime_adapter/llm/config.rs` — `GenerationConfig` 默认值
-- `core/examples/llm_streaming_metrics.rs` — 含软断言的参考示例
+- `crates/xybrid-core/src/runtime_adapter/llm.rs` — 后端抽象、Envelope metadata、tracing 发射与 `GenerationConfig`
+- `crates/xybrid-core/src/runtime_adapter/mlx/generate.rs` — MLX SafeTensors 生成循环与流式指标推导
+- `crates/xybrid-core/src/runtime_adapter/mlx/model.rs` — MLX LLM adapter

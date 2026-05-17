@@ -134,6 +134,10 @@ enum Commands {
         /// Target platform (auto-detected if not specified)
         #[arg(short, long, value_name = "PLATFORM")]
         platform: Option<String>,
+
+        /// Local generation or embedding backend override for registry artifact selection (auto, mlx, llamacpp, mistral)
+        #[arg(long, value_name = "BACKEND", conflicts_with = "huggingface")]
+        backend: Option<String>,
     },
     /// Manage the local model cache
     Cache {
@@ -201,6 +205,10 @@ enum Commands {
         #[arg(long, value_name = "TARGET")]
         target: Option<String>,
 
+        /// Local generation or embedding backend override (auto, mlx, llamacpp, mistral)
+        #[arg(long, value_name = "BACKEND")]
+        backend: Option<String>,
+
         /// Enable detailed execution tracing with flame graph output
         #[arg(long, default_value = "false")]
         trace: bool,
@@ -235,6 +243,10 @@ enum Commands {
         /// Target format for model resolution (onnx, coreml, tflite)
         #[arg(long, value_name = "TARGET")]
         target: Option<String>,
+
+        /// Local generation or embedding backend override (auto, mlx, llamacpp, mistral)
+        #[arg(long, value_name = "BACKEND")]
+        backend: Option<String>,
 
         /// Stream tokens as they are generated (LLM models only)
         #[arg(long)]
@@ -457,11 +469,20 @@ fn run_command(cli: Cli) -> Result<()> {
             model,
             huggingface,
             platform,
+            backend,
         } => {
             if let Some(config_path) = config {
-                commands::fetch::handle_fetch_pipeline_command(&config_path, platform.as_deref())
+                commands::fetch::handle_fetch_pipeline_command(
+                    &config_path,
+                    platform.as_deref(),
+                    backend.as_deref(),
+                )
             } else if let Some(model_id) = model {
-                commands::fetch::handle_fetch_command(&model_id, platform.as_deref())
+                commands::fetch::handle_fetch_command(
+                    &model_id,
+                    platform.as_deref(),
+                    backend.as_deref(),
+                )
             } else if let Some(repo) = huggingface {
                 commands::fetch::handle_fetch_huggingface_command(&repo)
             } else {
@@ -486,6 +507,7 @@ fn run_command(cli: Cli) -> Result<()> {
             voice,
             output,
             target,
+            backend,
             trace,
             trace_export,
         } => {
@@ -501,6 +523,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     voice.as_deref(),
                     output.as_ref(),
                     dry_run,
+                    backend.as_deref(),
                     trace,
                     trace_export.as_ref(),
                 );
@@ -514,6 +537,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     voice.as_deref(),
                     output.as_ref(),
                     target.as_deref(),
+                    backend.as_deref(),
                     dry_run,
                     trace,
                     trace_export.as_ref(),
@@ -527,6 +551,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     input_text.as_deref(),
                     voice.as_deref(),
                     output.as_ref(),
+                    backend.as_deref(),
                     dry_run,
                     trace,
                     trace_export.as_ref(),
@@ -540,6 +565,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     input_text.as_deref(),
                     voice.as_deref(),
                     output.as_ref(),
+                    backend.as_deref(),
                     dry_run,
                     trace,
                     trace_export.as_ref(),
@@ -553,6 +579,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     input_text.as_deref(),
                     voice.as_deref(),
                     output.as_ref(),
+                    backend.as_deref(),
                     dry_run,
                     trace,
                     trace_export.as_ref(),
@@ -569,6 +596,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 voice.as_deref(),
                 output.as_ref(),
                 target.as_deref(),
+                backend.as_deref(),
                 trace,
                 trace_export.as_ref(),
             )
@@ -580,6 +608,7 @@ fn run_command(cli: Cli) -> Result<()> {
             huggingface,
             voice,
             target,
+            backend,
             stream,
             system,
         } => commands::repl::handle_repl_command(
@@ -589,6 +618,7 @@ fn run_command(cli: Cli) -> Result<()> {
             huggingface,
             voice,
             target,
+            backend,
             stream,
             system,
             verbose,
@@ -671,4 +701,52 @@ fn resolve_config_path(config: Option<PathBuf>, pipeline: Option<String>) -> Res
     Err(anyhow::anyhow!(
         "Either --config, --pipeline, --bundle, or --model must be specified"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn run_accepts_backend_override_flag() {
+        let cli = Cli::try_parse_from([
+            "xybrid",
+            "run",
+            "--directory",
+            "/tmp/model",
+            "--backend",
+            "mlx",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Run { backend, .. } => assert_eq!(backend.as_deref(), Some("mlx")),
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn fetch_accepts_backend_override_flag() {
+        let cli =
+            Cli::try_parse_from(["xybrid", "fetch", "--model", "test-llm", "--backend", "mlx"])
+                .unwrap();
+
+        match cli.command {
+            Commands::Fetch { backend, .. } => assert_eq!(backend.as_deref(), Some("mlx")),
+            _ => panic!("expected fetch command"),
+        }
+    }
+
+    #[test]
+    fn repl_accepts_backend_override_flag() {
+        let cli =
+            Cli::try_parse_from(["xybrid", "repl", "--model", "test-llm", "--backend", "mlx"])
+                .unwrap();
+
+        match cli.command {
+            Commands::Repl { backend, .. } => assert_eq!(backend.as_deref(), Some("mlx")),
+            _ => panic!("expected repl command"),
+        }
+    }
 }

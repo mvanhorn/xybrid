@@ -94,10 +94,9 @@ pub mod mistral;
 #[cfg(feature = "llm-llamacpp")]
 pub mod llama_cpp;
 
-// MLX backend (feature-gated, Apple Silicon only via vendor/mlx-apple/mlx.xcframework)
-// Placeholder module in this iteration; tensor ops and LLM/embedding adapters land in
-// US-005..US-015. A compile_error! in the module fires if the feature is enabled on a
-// non-Apple target.
+// MLX backend (feature-gated, Apple Silicon only via vendor/mlx-apple/mlx.xcframework).
+// The `llm-mlx` tier compiles config parsing and selector/error surfaces without
+// linking MLX; `llm-mlx-runtime` enables the Apple runtime forward pass.
 #[cfg(feature = "llm-mlx")]
 pub mod mlx;
 

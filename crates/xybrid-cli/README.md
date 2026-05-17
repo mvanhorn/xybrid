@@ -22,6 +22,14 @@ irm https://raw.githubusercontent.com/xybrid-ai/xybrid/master/install.ps1 | iex
 cargo install --git https://github.com/xybrid-ai/xybrid xybrid-cli --features platform-macos
 ```
 
+`platform-macos` includes MLX registry/metadata support but not the linked MLX
+runtime. To run MLX SafeTensors models on Apple Silicon, build with
+`--features platform-macos,llm-mlx-runtime` from a local clone after running
+`./tools/scripts/fetch-mlx-xcframework.sh` when the pinned download is
+available or `./tools/scripts/build-local-mlx-xcframework.sh` for source-build
+validation. In external build environments, set `MLX_XCFRAMEWORK_PATH` to a
+prebuilt `mlx.xcframework`.
+
 ## Quick Start
 
 ```bash
@@ -36,6 +44,9 @@ xybrid run --model whisper-tiny --input-audio recording.wav
 
 # Chat with an LLM (interactive)
 xybrid repl --model smollm2-360m --stream
+
+# Chat through a specific local backend when available
+xybrid repl --model qwen3-4b --backend mlx --stream
 
 # Run any GGUF from HuggingFace
 xybrid run --huggingface "unsloth/SmolLM2-360M-Instruct-GGUF:Q4_K_M" --input-text "Hello!"

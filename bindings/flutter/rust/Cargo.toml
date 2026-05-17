@@ -70,6 +70,7 @@ llm-mistral-metal = ["xybrid-sdk/llm-mistral-metal"]
 llm-mistral-cuda = ["xybrid-sdk/llm-mistral-cuda"]
 llm-llamacpp = ["xybrid-sdk/llm-llamacpp"]
 llm-mlx = ["xybrid-sdk/llm-mlx"]
+llm-mlx-runtime = ["llm-mlx", "xybrid-sdk/llm-mlx-runtime"]
 huggingface = ["xybrid-sdk/huggingface"]
 
 [lints.rust]

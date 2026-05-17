@@ -136,16 +136,26 @@ compile_error!(
     - For other platforms: Use `ort-download` (CPU only)"
 );
 
-// llm-mlx uses Apple's MLX framework, which depends on Metal (macOS/iOS only).
-#[cfg(all(feature = "llm-mlx", not(any(target_os = "macos", target_os = "ios"))))]
+// llm-mlx-runtime links Apple's MLX framework through the validated
+// Apple Silicon macOS slice. The lighter llm-mlx feature intentionally stays
+// cross-platform so registry metadata, selectors, and docs can compile
+// without linking MLX.
+#[cfg(all(
+    feature = "llm-mlx-runtime",
+    not(all(target_os = "macos", target_arch = "aarch64"))
+))]
 compile_error!(
-    "Invalid feature combination: `llm-mlx` requires macOS or iOS.\n\n\
-    Reason: MLX is Apple's array framework and links against Metal + Accelerate, \
-    which are only available on Apple platforms.\n\n\
+    "Invalid feature combination: `llm-mlx-runtime` requires Apple Silicon macOS \
+    (`aarch64-apple-darwin`).\n\n\
+    Reason: `llm-mlx-runtime` links Apple's MLX framework against Metal + \
+    Accelerate through the validated macOS arm64 xcframework slice. Current iOS \
+    builds remain non-linking only until upstream MLX ships a Metal-enabled iOS \
+    slice. The `llm-mlx` feature is cross-platform and does not link MLX.\n\n\
     Solution:\n\
-    - For macOS/iOS: `llm-mlx` is valid (routes supported models via MLX)\n\
-    - For Android: Use `llm-llamacpp`\n\
-    - For other platforms: Use `llm-llamacpp` or `llm-mistral`"
+    - For Apple Silicon macOS runtime builds: use `llm-mlx-runtime`\n\
+    - For iOS selector/docs builds: use `llm-mlx`\n\
+    - For cross-platform selector/docs builds: use `llm-mlx`\n\
+    - For Android/Linux/Windows inference: use `llm-llamacpp` or `llm-mistral`"
 );
 
 /// Version of the `xybrid-core` crate, sourced from Cargo metadata at compile time.

@@ -43,7 +43,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -250798265;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -2080691098;
 
 // Section: executor
 
@@ -1409,6 +1409,54 @@ fn wire__crate__api__model__FfiModel_run_with_context_impl(
         },
     )
 }
+fn wire__crate__api__model__FfiModel_supports_token_streaming_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "FfiModel_supports_token_streaming",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FfiModel>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::api::model::FfiModel::supports_token_streaming(&*api_that_guard),
+                )?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__pipeline__FfiPipeline_from_bundle_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2461,6 +2509,30 @@ impl SseDecode for f64 {
     }
 }
 
+impl SseDecode for crate::api::model::FfiCloudFallbackAbort {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_reason = <crate::api::model::FfiCloudFallbackReason>::sse_decode(deserializer);
+        return crate::api::model::FfiCloudFallbackAbort { reason: var_reason };
+    }
+}
+
+impl SseDecode for crate::api::model::FfiCloudFallbackReason {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::model::FfiCloudFallbackReason::UserCancelled,
+            1 => crate::api::model::FfiCloudFallbackReason::StressThrottle,
+            2 => crate::api::model::FfiCloudFallbackReason::StressMemory,
+            3 => crate::api::model::FfiCloudFallbackReason::StressThermal,
+            4 => crate::api::model::FfiCloudFallbackReason::StressCpuSustained,
+            5 => crate::api::model::FfiCloudFallbackReason::BudgetExceeded,
+            _ => unreachable!("Invalid variant for FfiCloudFallbackReason: {}", inner),
+        };
+    }
+}
+
 impl SseDecode for crate::api::model::FfiGenerationConfig {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2653,6 +2725,11 @@ impl SseDecode for crate::api::model::FfiStreamEvent {
             2 => {
                 let mut var_field0 = <String>::sse_decode(deserializer);
                 return crate::api::model::FfiStreamEvent::Error(var_field0);
+            }
+            3 => {
+                let mut var_field0 =
+                    <crate::api::model::FfiCloudFallbackAbort>::sse_decode(deserializer);
+                return crate::api::model::FfiStreamEvent::CloudFallbackAbort(var_field0);
             }
             _ => {
                 unimplemented!("");
@@ -2951,7 +3028,7 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        34 => wire__crate__api__pipeline__FfiPipeline_run_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__pipeline__FfiPipeline_run_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -3034,93 +3111,98 @@ fn pde_ffi_dispatcher_sync_impl(
         22 => {
             wire__crate__api__model__FfiModelLoader_from_registry_impl(ptr, rust_vec_len, data_len)
         }
-        30 => wire__crate__api__pipeline__FfiPipeline_from_bundle_impl(ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__pipeline__FfiPipeline_from_file_impl(ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__pipeline__FfiPipeline_from_yaml_impl(ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__pipeline__FfiPipeline_name_impl(ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__pipeline__FfiPipeline_stage_count_impl(ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__pipeline__FfiPipeline_stage_names_impl(ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__device__XybridDevice_apply_debug_memory_pressure_impl(
+        30 => wire__crate__api__model__FfiModel_supports_token_streaming_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        38 => wire__crate__api__device__XybridDevice_clear_battery_level_impl(
+        31 => wire__crate__api__pipeline__FfiPipeline_from_bundle_impl(ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__pipeline__FfiPipeline_from_file_impl(ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__pipeline__FfiPipeline_from_yaml_impl(ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__pipeline__FfiPipeline_name_impl(ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__pipeline__FfiPipeline_stage_count_impl(ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__pipeline__FfiPipeline_stage_names_impl(ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__device__XybridDevice_apply_debug_memory_pressure_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        39 => wire__crate__api__device__XybridDevice_clear_debug_memory_pressure_impl(
+        39 => wire__crate__api__device__XybridDevice_clear_battery_level_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        40 => wire__crate__api__device__XybridDevice_clear_thermal_state_impl(
+        40 => wire__crate__api__device__XybridDevice_clear_debug_memory_pressure_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        41 => wire__crate__api__device__XybridDevice_current_snapshot_impl(
+        41 => wire__crate__api__device__XybridDevice_clear_thermal_state_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        42 => wire__crate__api__device__XybridDevice_set_battery_level_impl(
+        42 => wire__crate__api__device__XybridDevice_current_snapshot_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        43 => wire__crate__api__device__XybridDevice_set_thermal_state_impl(
+        43 => wire__crate__api__device__XybridDevice_set_battery_level_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        44 => wire__crate__api__sdk_client__XybridSdkClient_configure_platform_telemetry_impl(
+        44 => wire__crate__api__device__XybridDevice_set_thermal_state_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        45 => wire__crate__api__sdk_client__XybridSdkClient_flush_platform_telemetry_impl(
+        45 => wire__crate__api__sdk_client__XybridSdkClient_configure_platform_telemetry_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        46 => wire__crate__api__sdk_client__XybridSdkClient_init_sdk_cache_dir_impl(
+        46 => wire__crate__api__sdk_client__XybridSdkClient_flush_platform_telemetry_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        47 => wire__crate__api__sdk_client__XybridSdkClient_init_telemetry_impl(
+        47 => wire__crate__api__sdk_client__XybridSdkClient_init_sdk_cache_dir_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        48 => wire__crate__api__sdk_client__XybridSdkClient_is_model_cached_impl(
+        48 => wire__crate__api__sdk_client__XybridSdkClient_init_telemetry_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        49 => wire__crate__api__sdk_client__XybridSdkClient_is_telemetry_initialized_impl(
+        49 => wire__crate__api__sdk_client__XybridSdkClient_is_model_cached_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        50 => wire__crate__api__sdk_client__XybridSdkClient_set_api_key_impl(
+        50 => wire__crate__api__sdk_client__XybridSdkClient_is_telemetry_initialized_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        51 => wire__crate__api__sdk_client__XybridSdkClient_set_gateway_url_impl(
+        51 => wire__crate__api__sdk_client__XybridSdkClient_set_api_key_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        52 => wire__crate__api__model__ffi_generation_config_creative_impl(
+        52 => wire__crate__api__sdk_client__XybridSdkClient_set_gateway_url_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        53 => {
+        53 => wire__crate__api__model__ffi_generation_config_creative_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        54 => {
             wire__crate__api__model__ffi_generation_config_greedy_impl(ptr, rust_vec_len, data_len)
         }
         _ => unreachable!(),
@@ -3239,6 +3321,48 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<XybridSdkClient>> for XybridSd
     }
 }
 
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::model::FfiCloudFallbackAbort {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.reason.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::model::FfiCloudFallbackAbort
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::model::FfiCloudFallbackAbort>
+    for crate::api::model::FfiCloudFallbackAbort
+{
+    fn into_into_dart(self) -> crate::api::model::FfiCloudFallbackAbort {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::model::FfiCloudFallbackReason {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::UserCancelled => 0.into_dart(),
+            Self::StressThrottle => 1.into_dart(),
+            Self::StressMemory => 2.into_dart(),
+            Self::StressThermal => 3.into_dart(),
+            Self::StressCpuSustained => 4.into_dart(),
+            Self::BudgetExceeded => 5.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::model::FfiCloudFallbackReason
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::model::FfiCloudFallbackReason>
+    for crate::api::model::FfiCloudFallbackReason
+{
+    fn into_into_dart(self) -> crate::api::model::FfiCloudFallbackReason {
+        self
+    }
+}
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::model::FfiGenerationConfig {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
@@ -3475,6 +3599,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::model::FfiStreamEvent {
             }
             crate::api::model::FfiStreamEvent::Error(field0) => {
                 [2.into_dart(), field0.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::model::FfiStreamEvent::CloudFallbackAbort(field0) => {
+                [3.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
                 unimplemented!("");
@@ -3727,6 +3854,33 @@ impl SseEncode for f64 {
     }
 }
 
+impl SseEncode for crate::api::model::FfiCloudFallbackAbort {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::model::FfiCloudFallbackReason>::sse_encode(self.reason, serializer);
+    }
+}
+
+impl SseEncode for crate::api::model::FfiCloudFallbackReason {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::model::FfiCloudFallbackReason::UserCancelled => 0,
+                crate::api::model::FfiCloudFallbackReason::StressThrottle => 1,
+                crate::api::model::FfiCloudFallbackReason::StressMemory => 2,
+                crate::api::model::FfiCloudFallbackReason::StressThermal => 3,
+                crate::api::model::FfiCloudFallbackReason::StressCpuSustained => 4,
+                crate::api::model::FfiCloudFallbackReason::BudgetExceeded => 5,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
 impl SseEncode for crate::api::model::FfiGenerationConfig {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -3873,6 +4027,10 @@ impl SseEncode for crate::api::model::FfiStreamEvent {
             crate::api::model::FfiStreamEvent::Error(field0) => {
                 <i32>::sse_encode(2, serializer);
                 <String>::sse_encode(field0, serializer);
+            }
+            crate::api::model::FfiStreamEvent::CloudFallbackAbort(field0) => {
+                <i32>::sse_encode(3, serializer);
+                <crate::api::model::FfiCloudFallbackAbort>::sse_encode(field0, serializer);
             }
             _ => {
                 unimplemented!("");
