@@ -26,6 +26,33 @@ class XybridException implements Exception {
   String toString() => 'XybridException: $message';
 }
 
+CloudFallbackReason _cloudFallbackReasonFromFfi(FfiCloudFallbackReason reason) {
+  return switch (reason) {
+    FfiCloudFallbackReason.userCancelled => CloudFallbackReason.userCancelled,
+    FfiCloudFallbackReason.stressThrottle => CloudFallbackReason.stressThrottle,
+    FfiCloudFallbackReason.stressMemory => CloudFallbackReason.stressMemory,
+    FfiCloudFallbackReason.stressThermal => CloudFallbackReason.stressThermal,
+    FfiCloudFallbackReason.stressCpuSustained =>
+      CloudFallbackReason.stressCpuSustained,
+    FfiCloudFallbackReason.budgetExceeded => CloudFallbackReason.budgetExceeded,
+  };
+}
+
+StreamToken _cloudFallbackAbortToken(
+  FfiCloudFallbackAbort abort, {
+  required bool isFinal,
+}) {
+  final reason = _cloudFallbackReasonFromFfi(abort.reason);
+  return StreamToken(
+    token: '',
+    index: 0,
+    cumulativeText: '',
+    isFinal: isFinal,
+    finishReason: isFinal ? 'cloud_fallback: ${reason.wireName}' : null,
+    cloudFallbackReason: reason,
+  );
+}
+
 /// Event emitted during model loading with progress tracking.
 sealed class LoadEvent {
   const LoadEvent._();
@@ -286,6 +313,11 @@ class XybridModel {
                 finishReason: 'error: $field0',
               );
             }
+          case FfiStreamEvent_CloudFallbackAbort(:final field0):
+            if (!emittedFinal) {
+              emittedFinal = true;
+              yield _cloudFallbackAbortToken(field0, isFinal: true);
+            }
         }
       }
     } catch (e) {
@@ -346,6 +378,10 @@ class XybridModel {
                 isFinal: true,
                 finishReason: 'error: $field0',
               );
+            }
+          case FfiStreamEvent_CloudFallbackAbort(:final field0):
+            if (!emittedFinal) {
+              yield _cloudFallbackAbortToken(field0, isFinal: false);
             }
         }
       }
@@ -423,6 +459,8 @@ class XybridModel {
               isFinal: true,
               finishReason: 'error: $field0',
             );
+          case FfiStreamEvent_CloudFallbackAbort(:final field0):
+            yield _cloudFallbackAbortToken(field0, isFinal: true);
         }
       }
     } catch (e) {

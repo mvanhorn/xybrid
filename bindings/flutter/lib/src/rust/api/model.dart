@@ -15,9 +15,9 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'result.dart';
 part 'model.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_cloud_fallback_metadata`, `is_debug_gateway_host`, `is_ipv6_link_local`, `is_ipv6_unique_local`, `is_v1_gateway_base`, `is_xybrid_gateway_host`, `non_empty`, `normalize_gateway_url`, `to_sdk`, `to_sdk`, `validate_cloud_gateway_url`, `validated_cloud_gateway_url`
+// These functions are ignored because they are not marked as `pub`: `apply_cloud_fallback_metadata`, `is_debug_gateway_host`, `is_ipv6_link_local`, `is_ipv6_unique_local`, `is_v1_gateway_base`, `is_xybrid_gateway_host`, `non_empty`, `normalize_gateway_url`, `stream_error_event`, `to_sdk`, `to_sdk`, `validate_cloud_gateway_url`, `validated_cloud_gateway_url`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FlutterFallbackResourceProvider`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `current_snapshot`, `fmt`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `current_snapshot`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FfiModel>>
 abstract class FfiModel implements RustOpaqueInterface {
@@ -127,6 +127,37 @@ abstract class FfiModelLoader implements RustOpaqueInterface {
   ///
   /// After receiving `Complete`, call `load()` to get the cached model instantly.
   Stream<FfiLoadEvent> loadWithProgress();
+}
+
+/// Structured marker emitted when local inference aborts for cloud fallback.
+class FfiCloudFallbackAbort {
+  final FfiCloudFallbackReason reason;
+
+  const FfiCloudFallbackAbort({
+    required this.reason,
+  });
+
+  @override
+  int get hashCode => reason.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FfiCloudFallbackAbort &&
+          runtimeType == other.runtimeType &&
+          reason == other.reason;
+}
+
+/// Typed reason for a local stream abort that should be surfaced as a
+/// cloud-fallback marker instead of a generic string error.
+enum FfiCloudFallbackReason {
+  userCancelled,
+  stressThrottle,
+  stressMemory,
+  stressThermal,
+  stressCpuSustained,
+  budgetExceeded,
+  ;
 }
 
 /// Generation parameters for LLM inference.
@@ -285,6 +316,11 @@ sealed class FfiStreamEvent with _$FfiStreamEvent {
   const factory FfiStreamEvent.error(
     String field0,
   ) = FfiStreamEvent_Error;
+
+  /// Local inference aborted for cloud fallback with a typed reason
+  const factory FfiStreamEvent.cloudFallbackAbort(
+    FfiCloudFallbackAbort field0,
+  ) = FfiStreamEvent_CloudFallbackAbort;
 }
 
 /// Token received during streaming inference.
